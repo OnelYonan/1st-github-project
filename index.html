@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#1d6fd8" />
+    <meta name="description" content="Schedule jobs, send quotes and invoices, and track income and expenses." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>Business Hub</title>
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
@@ -17,13 +19,18 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
         </button>
         <div class="brand"><div class="brand-logo js-logo">B</div><span class="brand-name js-bizname">Business Hub</span></div>
+        <span class="spacer"></span>
+        <button class="btn-icon btn" id="searchBtn" aria-label="Search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        </button>
       </header>
       <aside class="sidebar" id="sidebar">
         <div class="brand"><div class="brand-logo js-logo">B</div><span class="brand-name js-bizname">Business Hub</span></div>
         <nav class="nav" id="nav"></nav>
       </aside>
-      <main class="main" id="main"></main>
+      <main class="main" id="main"><div class="empty">Loading…</div></main>
     </div>
+    <nav class="bottom-nav" id="bottomNav" aria-label="Main"></nav>
     <div id="modalRoot"></div>
     <script src="js/app.js"></script>
   </body>

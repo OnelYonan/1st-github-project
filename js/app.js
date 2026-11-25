@@ -35,11 +35,15 @@ function money(n) {
   try { return new Intl.NumberFormat(loc, { style: 'currency', currency: cur }).format(+n || 0); }
   catch { return '$' + (+n || 0).toFixed(2); }
 }
+function curSymbol() {
+  try { return new Intl.NumberFormat('en', { style: 'currency', currency: db.settings.currency || 'CAD', currencyDisplay: 'narrowSymbol' }).formatToParts(0).find(p => p.type === 'currency').value; }
+  catch { return '$'; }
+}
 function moneyShort(n) {
-  const a = Math.abs(n);
-  if (a >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
-  if (a >= 1e3) return '$' + +(n / 1e3).toFixed(a >= 1e4 ? 0 : 1) + 'k';
-  return '$' + Math.round(n);
+  const a = Math.abs(n), c = curSymbol();
+  if (a >= 1e6) return c + +(n / 1e6).toFixed(1) + 'M';
+  if (a >= 1e3) return c + +(n / 1e3).toFixed(a >= 1e4 ? 0 : 1) + 'k';
+  return c + Math.round(n);
 }
 
 const I = {
@@ -65,6 +69,17 @@ const I = {
   check: '<path d="M20 6 9 17l-5-5"/>',
   receipt: '<path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 2 2V2l-2 2-3-2-3 2-3-2-3 2-3-2z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  funnel: '<path d="M22 3H2l8 9.46V19l4 2v-8.54z"/>',
+  todo: '<path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  camera: '<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>',
+  route: '<path d="M3 11 22 2l-9 19-2-8z"/>',
+  more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  star: '<path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/>',
+  truck: '<path d="M1 3h15v13H1zM16 8h4l3 3v5h-7z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
+  statement: '<path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h4"/>',
+  share: '<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M16 6l-4-4-4 4M12 2v13"/>',
+  trash: '<path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
 };
 const icon = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n] || ''}</svg>`;
 
@@ -81,7 +96,19 @@ const DEFAULT_SETTINGS = {
   invoiceNotes: 'Thank you for your business!',
   quoteNotes: 'This quote is valid for 30 days. Prices include labour and materials listed above.',
   mileageRate: 0.72, distanceUnit: 'km', theme: 'auto',
+  paymentLink: '', reviewLink: '', monthlyGoal: 0, lastBackup: '',
+  tplInvoice: 'Hi {first}, here is invoice {number} from {business} for {total}, due {due}.\n\n{items}\n\n{pay}\n\nThank you!\n{signature}',
+  tplReminder: 'Hi {first}, a friendly reminder that invoice {number} for {balance} was due {due}.\n\n{pay}\n\nIf you have already paid, please ignore this message. Thank you!\n{signature}',
+  tplQuote: 'Hi {first}, thanks for the opportunity! Here is quote {number} from {business} for {total}, valid until {valid}.\n\n{items}\n\nJust reply to let me know if you would like to go ahead and we will get you booked in.\n{signature}',
+  tplQuoteFollow: 'Hi {first}, just following up on quote {number} for {total}. Any questions? Reply any time and we can get you on the schedule.\n{signature}',
+  tplAppt: 'Hi {first}, this is {business} confirming your appointment on {date}{time}. See you then!',
+  tplOnWay: 'Hi {first}, this is {business}. We are on our way and should arrive in about 20 minutes.',
+  tplReview: 'Hi {first}, thanks again for choosing {business}! If you were happy with the work, a quick review would mean a lot to us: {review}',
 };
+const TEMPLATES = [['tplAppt', 'Appointment confirmation'], ['tplOnWay', 'On my way'], ['tplQuote', 'Sending a quote'], ['tplQuoteFollow', 'Quote follow-up'],
+  ['tplInvoice', 'Sending an invoice'], ['tplReminder', 'Payment reminder'], ['tplReview', 'Review request']];
+const LEAD_STAGES = [['new', 'New'], ['contacted', 'Contacted'], ['quoted', 'Quoted'], ['won', 'Won'], ['lost', 'Lost']];
+const LEAD_SOURCES = ['', 'Referral', 'Google', 'Facebook / Instagram', 'Website', 'Door knocking', 'Door hanger / flyer', 'Repeat customer', 'Other'];
 const DEFAULT_CATEGORIES = ['Materials & Supplies', 'Fuel', 'Vehicle Repairs & Maintenance', 'Tools & Equipment', 'Subcontractors',
   'Wages & Payroll', 'Insurance', 'Advertising & Marketing', 'Software & Subscriptions', 'Phone & Internet',
   'Office Supplies', 'Rent & Utilities', 'Meals', 'Licences, Permits & Fees', 'Bank & Payment Fees', 'Professional Fees', 'Other'];
@@ -89,23 +116,54 @@ const PAY_METHODS = ['e-Transfer', 'Cash', 'Cheque', 'Credit card', 'Debit', 'Ba
 
 function blank() {
   return { settings: { ...DEFAULT_SETTINGS }, categories: [...DEFAULT_CATEGORIES], customers: [], services: [], jobs: [],
-    quotes: [], invoices: [], expenses: [], incomes: [], mileage: [] };
+    quotes: [], invoices: [], expenses: [], incomes: [], mileage: [], leads: [], tasks: [] };
 }
 function normalize(d) {
   const b = blank();
   const out = { ...b, ...d, settings: { ...b.settings, ...(d.settings || {}) } };
-  for (const k of ['customers', 'services', 'jobs', 'quotes', 'invoices', 'expenses', 'incomes', 'mileage', 'categories'])
+  for (const k of ['customers', 'services', 'jobs', 'quotes', 'invoices', 'expenses', 'incomes', 'mileage', 'categories', 'leads', 'tasks'])
     if (!Array.isArray(out[k])) out[k] = b[k];
   return out;
 }
-function load() {
-  try { const raw = localStorage.getItem(KEY); if (raw) return normalize(JSON.parse(raw)); } catch { /* fall through */ }
-  return blank();
+/* Data lives in IndexedDB (hundreds of MB available, so photos are fine).
+ * Falls back to localStorage if IndexedDB is unavailable (e.g. some private windows). */
+const idb = (() => {
+  let conn;
+  const open = () => conn ||= new Promise((res, rej) => {
+    const r = indexedDB.open('bizhub', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+  const tx = (mode, fn) => open().then(d => new Promise((res, rej) => {
+    const t = d.transaction('kv', mode); const req = fn(t.objectStore('kv'));
+    t.oncomplete = () => res(req.result); t.onerror = t.onabort = () => rej(t.error);
+  }));
+  return { get: k => tx('readonly', st => st.get(k)), set: (k, v) => tx('readwrite', st => st.put(v, k)) };
+})();
+let storageMode = 'idb';
+let db = blank();
+async function load() {
+  try {
+    const stored = await idb.get(KEY);
+    if (stored) return normalize(JSON.parse(stored));
+    const legacy = localStorage.getItem(KEY); // migrate data saved by the first version
+    if (legacy) { await idb.set(KEY, legacy); localStorage.removeItem(KEY); return normalize(JSON.parse(legacy)); }
+    return blank();
+  } catch {
+    storageMode = 'local';
+    try { const raw = localStorage.getItem(KEY); if (raw) return normalize(JSON.parse(raw)); } catch { /* ignore */ }
+    return blank();
+  }
 }
-let db = load();
+let saveChain = Promise.resolve();
 function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(db)); }
-  catch { toast('Could not save — browser storage is full. Export a backup and remove some receipt photos.'); }
+  const snapshot = JSON.stringify(db);
+  if (storageMode === 'local') {
+    try { localStorage.setItem(KEY, snapshot); }
+    catch { toast('Could not save — storage is full. Download a backup and remove some photos.'); }
+    return;
+  }
+  saveChain = saveChain.then(() => idb.set(KEY, snapshot)).catch(() => toast('Could not save your last change — please download a backup from Settings.'));
 }
 
 const byId = (coll, id) => db[coll].find(x => x.id === id);
@@ -113,10 +171,24 @@ const cust = id => byId('customers', id);
 const custName = id => cust(id)?.name || '—';
 
 function nextNumber(kind) {
-  const s = db.settings;
-  if (kind === 'invoice') return s.invoicePrefix + (s.nextInvoiceNo++);
-  return s.quotePrefix + (s.nextQuoteNo++);
+  const s = db.settings, isInv = kind === 'invoice';
+  const coll = isInv ? db.invoices : db.quotes, key = isInv ? 'nextInvoiceNo' : 'nextQuoteNo', prefix = isInv ? s.invoicePrefix : s.quotePrefix;
+  let n;
+  do { n = prefix + (s[key]++); } while (coll.some(x => x.number === n)); // never reuse a number
+  return n;
 }
+
+/* ----- customer message templates ----- */
+function fillTemplate(key, vars) {
+  const s = db.settings;
+  const pay = [s.paymentInstructions, s.paymentLink && `Pay online: ${s.paymentLink}`].filter(Boolean).join('\n');
+  const all = { business: s.businessName || 'us', signature: [s.ownerName || s.businessName, s.businessName && s.ownerName ? s.businessName : '', s.phone].filter(Boolean).join('\n'),
+    pay, review: s.reviewLink || '', ...vars };
+  return String(s[key] || DEFAULT_SETTINGS[key] || '').replace(/\{(\w+)\}/g, (m, k) => all[k] ?? '').replace(/\n{3,}/g, '\n\n').trim();
+}
+function custVars(c) { return { customer: c?.name || '', first: firstName(c?.name) }; }
+const smsHref = (phone, text) => `sms:${encodeURIComponent(phone || '')}${text ? '?&body=' + encodeURIComponent(text) : ''}`;
+const mailHref = (email, subject, body) => `mailto:${encodeURIComponent(email || '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
 /* ----- money maths ----- */
 function totals(doc) {
@@ -211,15 +283,19 @@ function toast(msg) {
 function modal({ title, body, wide = false, submitLabel = 'Save', onSubmit, onMount, footExtra = '', noFoot = false }) {
   const wrap = document.createElement('div');
   wrap.className = 'modal-backdrop';
-  wrap.innerHTML = `<form class="modal ${wide ? 'wide' : ''}" autocomplete="off">
+  wrap.innerHTML = `<form class="modal ${wide ? 'wide' : ''}" autocomplete="off" role="dialog" aria-modal="true" aria-label="${esc(title)}">
     <div class="modal-head"><h2>${esc(title)}</h2><button type="button" class="btn btn-icon" data-close aria-label="Close">✕</button></div>
     <div class="modal-body">${body}</div>
     ${noFoot ? '' : `<div class="modal-foot">${footExtra}<span class="spacer"></span><button type="button" class="btn" data-close>Cancel</button><button class="btn btn-primary" type="submit">${esc(submitLabel)}</button></div>`}
   </form>`;
   $('#modalRoot').append(wrap);
   const form = $('form', wrap);
+  let dirty = false;
   const close = () => wrap.remove();
-  wrap.addEventListener('click', e => { if (e.target.closest('[data-close]')) close(); });
+  const requestClose = () => { if (!dirty || confirm('Discard your changes?')) close(); };
+  wrap._requestClose = requestClose;
+  form.addEventListener('input', e => { if (!e.target.closest('[data-nodirty]')) dirty = true; });
+  wrap.addEventListener('click', e => { if (e.target.closest('[data-close]')) requestClose(); });
   form.addEventListener('submit', e => {
     e.preventDefault();
     if (onSubmit?.(form, Object.fromEntries(new FormData(form))) !== false) close();
@@ -228,7 +304,11 @@ function modal({ title, body, wide = false, submitLabel = 'Save', onSubmit, onMo
   setTimeout(() => $('input:not([type=hidden]):not([type=file]),select,textarea', form)?.focus(), 30);
   return { form, close };
 }
-document.addEventListener('keydown', e => { if (e.key === 'Escape') $('#modalRoot .modal-backdrop:last-child')?.remove(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { $('#modalRoot .modal-backdrop:last-child')?._requestClose(); return; }
+  const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
+  if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !typing && !$('#modalRoot').children.length)) { e.preventDefault(); openSearch(); }
+});
 
 const field = (label, input, cls = '') => `<div class="field ${cls}"><label>${label}</label>${input}</div>`;
 const inp = (name, val = '', attrs = '') => `<input name="${name}" value="${esc(val)}" ${attrs}>`;
@@ -278,12 +358,13 @@ function mountItemsEditor(form, doc) {
   }
   function draw() {
     tb.innerHTML = items.map((it, i) => `<tr data-i="${i}">
-      <td><input list="svcList" data-k="desc" value="${esc(it.desc)}" placeholder="Service or product"></td>
+      <td><input list="svcList" data-k="desc" value="${esc(it.desc)}" placeholder="Service or product" aria-label="Item">
+        <input class="details" data-k="details" value="${esc(it.details || '')}" placeholder="Details (optional)" aria-label="Item details"></td>
       <td><input class="qty right" type="number" step="any" data-k="qty" value="${esc(it.qty)}"></td>
       <td><input class="price right" type="number" step="0.01" data-k="price" value="${esc(it.price)}" placeholder="0.00"></td>
       <td class="tx"><input type="checkbox" data-k="taxable" ${it.taxable !== false ? 'checked' : ''}></td>
       <td class="num js-line">${lineAmt(it)}</td>
-      <td><button type="button" class="btn btn-icon" data-rm="${i}" aria-label="Remove line">✕</button></td></tr>`).join('');
+      <td class="item-ctl">${items.length > 1 ? `<button type="button" class="btn btn-icon" data-up="${i}" aria-label="Move up" ${i ? '' : 'disabled'}>↑</button>` : ''}<button type="button" class="btn btn-icon" data-rm="${i}" aria-label="Remove line">✕</button></td></tr>`).join('');
     drawTotals();
   }
   tb.addEventListener('input', e => {
@@ -292,17 +373,24 @@ function mountItemsEditor(form, doc) {
     it[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
     if (k === 'desc') {
       const s = db.services.find(s => s.name === it.desc);
-      if (s) { it.price = s.price; it.taxable = s.taxable !== false; $('[data-k=price]', tr).value = s.price; $('[data-k=taxable]', tr).checked = it.taxable; }
+      if (s) {
+        it.price = s.price; it.taxable = s.taxable !== false; $('[data-k=price]', tr).value = s.price; $('[data-k=taxable]', tr).checked = it.taxable;
+        if (s.description && !it.details) { it.details = s.description; $('[data-k=details]', tr).value = s.description; }
+      }
     }
     $('.js-line', tr).textContent = lineAmt(it); drawTotals();
   });
-  tb.addEventListener('click', e => { const b = e.target.closest('[data-rm]'); if (b) { items.splice(+b.dataset.rm, 1); if (!items.length) items.push(blankItem()); draw(); } });
+  tb.addEventListener('click', e => {
+    const b = e.target.closest('[data-rm]'), u = e.target.closest('[data-up]');
+    if (b) { items.splice(+b.dataset.rm, 1); if (!items.length) items.push(blankItem()); draw(); }
+    if (u && +u.dataset.up > 0) { const i = +u.dataset.up; [items[i - 1], items[i]] = [items[i], items[i - 1]]; draw(); }
+  });
   $('.js-add-item', form).addEventListener('click', () => { items.push(blankItem()); draw(); $$('[data-k=desc]', tb).pop()?.focus(); });
   form.discount.addEventListener('input', drawTotals);
   form.taxRate.addEventListener('input', drawTotals);
   draw();
   return () => items.filter(it => String(it.desc).trim() || +it.price)
-    .map(it => ({ desc: String(it.desc).trim(), qty: +it.qty || 0, price: round2(it.price), taxable: it.taxable !== false }));
+    .map(it => ({ desc: String(it.desc).trim(), details: String(it.details || '').trim(), qty: +it.qty || 0, price: round2(it.price), taxable: it.taxable !== false }));
 }
 
 function itemsTable(doc, { compact = false } = {}) {
@@ -416,25 +504,34 @@ document.addEventListener('mousemove', e => {
  * ===================================================================== */
 const NAV = [
   ['dashboard', 'Dashboard', 'home'], ['schedule', 'Schedule', 'calendar'], ['jobs', 'Jobs', 'jobs'],
-  ['customers', 'Customers', 'users'], ['quotes', 'Quotes', 'quote'], ['invoices', 'Invoices', 'invoice'],
+  ['leads', 'Leads', 'funnel'], ['tasks', 'To-dos', 'todo'],
+  ['sep'], ['customers', 'Customers', 'users'], ['quotes', 'Quotes', 'quote'], ['invoices', 'Invoices', 'invoice'],
   ['sep'], ['income', 'Income', 'income'], ['expenses', 'Expenses', 'expense'], ['reports', 'Reports', 'reports'],
   ['sep'], ['services', 'Price Book', 'tag'], ['settings', 'Settings', 'settings'],
 ];
-const state = { calMonth: today().slice(0, 7), calDay: today(), filters: {} };
+const BOTTOM_NAV = [['dashboard', 'Home', 'home'], ['schedule', 'Schedule', 'calendar'], ['jobs', 'Jobs', 'jobs'], ['invoices', 'Invoices', 'invoice']];
+const state = { calMonth: today().slice(0, 7), calDay: today(), calView: 'month', calTeam: '', filters: {}, loaded: false };
 const filt = (view, key, def) => (state.filters[view] ||= {})[key] ?? def;
 
 function renderChrome() {
   const s = db.settings;
   $$('.js-bizname').forEach(el => el.textContent = s.businessName || 'Business Hub');
   $$('.js-logo').forEach(el => el.innerHTML = s.logo ? `<img src="${s.logo}" alt="">` : esc((s.businessName || 'B')[0].toUpperCase()));
-  const cur = (location.hash.split('/')[1] || 'dashboard');
-  $('#nav').innerHTML = NAV.map(([k, l, ic]) => k === 'sep' ? '<div class="sep"></div>' :
-    `<a href="#/${k}" class="${cur === k ? 'active' : ''}">${icon(ic)}<span>${l}</span></a>`).join('');
+  let cur = (location.hash.split('/')[1] || 'dashboard');
+  if (cur === 'statement') cur = 'customers';
+  const counts = { leads: db.leads.filter(l => l.stage === 'new').length,
+    tasks: db.tasks.filter(t => !t.done && t.due && t.due <= today()).length };
+  $('#nav').innerHTML = `<button class="search-btn" data-act="openSearch">${icon('search')}<span>Search</span><kbd>Ctrl K</kbd></button>` +
+    NAV.map(([k, l, ic]) => k === 'sep' ? '<div class="sep"></div>' :
+    `<a href="#/${k}" class="${cur === k ? 'active' : ''}">${icon(ic)}<span>${l}</span>${counts[k] ? `<span class="count">${counts[k]}</span>` : ''}</a>`).join('');
+  $('#bottomNav').innerHTML = BOTTOM_NAV.map(([k, l, ic]) => `<a href="#/${k}" class="${cur === k ? 'active' : ''}">${icon(ic)}<span>${l}</span></a>`).join('') +
+    `<button data-act="openMenu" class="${BOTTOM_NAV.some(b => b[0] === cur) ? '' : 'active'}">${icon('more')}<span>More</span></button>`;
   const theme = s.theme === 'auto' ? null : s.theme;
   if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme;
 }
 
 function render() {
+  if (!state.loaded) return;
   const [, name = 'dashboard', id] = (location.hash || '#/dashboard').split('/');
   const view = VIEWS[name] || VIEWS.dashboard;
   renderChrome();
@@ -445,7 +542,7 @@ function render() {
 }
 const fab = name => {
   const map = { dashboard: 'newJob', schedule: 'newJob', jobs: 'newJob', customers: 'newCustomer', quotes: 'newQuote',
-    invoices: 'newInvoice', expenses: 'newExpense', income: 'newIncome', services: 'newService' };
+    invoices: 'newInvoice', expenses: 'newExpense', income: 'newIncome', services: 'newService', leads: 'newLead', tasks: 'newTask' };
   return map[name] ? `<button class="fab no-print" data-act="${map[name]}" aria-label="Add">${icon('plus')}</button>` : '';
 };
 const go = h => { if (location.hash === h) render(); else location.hash = h; };
@@ -473,96 +570,197 @@ VIEWS.dashboard = () => {
   const ar = sum(open, balance);
   const upcoming = db.jobs.filter(j => ['scheduled', 'in_progress'].includes(j.status) && inRange(j.date, t, addDays(t, 7)))
     .sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || '')));
+  const todayCount = upcoming.filter(j => j.date === t).length;
   const staleQuotes = db.quotes.filter(q => q.status === 'sent' && q.sentAt && daysBetween(q.sentAt, t) >= 3 && quoteStatus(q) !== 'expired');
   const uninvoiced = db.jobs.filter(j => j.status === 'completed' && !j.invoiceId && !j.noInvoice);
   const lateJobs = db.jobs.filter(j => j.status === 'scheduled' && j.date && j.date < t);
+  const newLeads = db.leads.filter(l => l.stage === 'new');
+  const dueTasks = db.tasks.filter(x => !x.done && (!x.due || x.due <= addDays(t, 1))).sort(taskSort);
+  const followUps = db.leads.filter(l => !['won', 'lost'].includes(l.stage) && l.followUp && l.followUp <= t);
   const hr = new Date().getHours();
   const greet = hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening';
-  const isEmpty = !db.customers.length && !db.invoices.length && !db.jobs.length;
+  const isEmpty = !db.customers.length && !db.invoices.length && !db.jobs.length && !db.leads.length;
+  const hasData = db.customers.length + db.jobs.length + db.invoices.length > 0;
+  const needsBackup = hasData && (!s.lastBackup || daysBetween(s.lastBackup, t) >= 14);
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
+  const setupSteps = [
+    [!!s.businessName, 'Add your business name and logo', '#/settings'],
+    [db.services.length > 0, 'Add your services to the price book', '#/services'],
+    [db.customers.length > 0, 'Add your first customer', '#/customers'],
+    [db.quotes.length + db.invoices.length > 0, 'Send your first quote or invoice', '#/quotes'],
+  ];
+  const setupLeft = setupSteps.filter(x => !x[0]).length;
   const welcome = isEmpty ? `<div class="card" style="margin-bottom:16px"><h2>Welcome! Let’s get your business set up 👋</h2>
     <p class="muted">Add your business details and logo so they appear on quotes and invoices, then add your first customer.
-    Want to look around first? Load sample data — you can erase it any time from Settings.</p>
-    <div class="row"><a class="btn btn-primary" href="#/settings">Set up my business</a>${btn('Add a customer', 'newCustomer')}${btn('Load sample data', 'loadSample')}</div></div>` : '';
+    Want to look around first? Load sample data. You can erase it any time from Settings.</p>
+    <div class="row"><a class="btn btn-primary" href="#/settings">Set up my business</a>${btn('Add a customer', 'newCustomer')}${btn('Load sample data', 'loadSample')}</div></div>`
+    : setupLeft && !s.hideSetup ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Getting started · ${4 - setupLeft} of 4 done</h2>${btn('Hide', 'hideSetup', 'btn-sm')}</div>
+      <div class="progress" style="margin-bottom:10px"><i style="width:${(4 - setupLeft) * 25}%"></i></div>
+      ${setupSteps.map(([done, label, href]) => `<a class="setup-step ${done ? 'done' : ''}" href="${href}">${icon(done ? 'check' : 'plus')}<span>${label}</span></a>`).join('')}</div>` : '';
 
   const alerts = [
-    overdue.length && `<a class="alert bad" href="#/invoices">${icon('alert')}<span><b>${overdue.length} overdue invoice${overdue.length > 1 ? 's' : ''}</b> totalling ${money(sum(overdue, balance))} — send a reminder.</span></a>`,
-    uninvoiced.length && `<a class="alert warn" href="#/jobs" data-tabset="jobs:tab:uninvoiced">${icon('invoice')}<span><b>${uninvoiced.length} completed job${uninvoiced.length > 1 ? 's' : ''}</b> not invoiced yet.</span></a>`,
-    staleQuotes.length && `<a class="alert info" href="#/quotes">${icon('quote')}<span><b>${staleQuotes.length} quote${staleQuotes.length > 1 ? 's' : ''}</b> sent 3+ days ago with no answer — time to follow up.</span></a>`,
-    lateJobs.length && `<a class="alert warn" href="#/jobs" data-tabset="jobs:tab:late">${icon('calendar')}<span><b>${lateJobs.length} past job${lateJobs.length > 1 ? 's' : ''}</b> still marked as scheduled — mark them complete.</span></a>`,
+    overdue.length && `<a class="alert bad" href="#/invoices" data-tabset="invoices:tab:overdue">${icon('alert')}<span><b>${plural(overdue.length, 'overdue invoice')}</b> totalling ${money(sum(overdue, balance))}. Send a reminder.</span></a>`,
+    newLeads.length && `<a class="alert info" href="#/leads">${icon('funnel')}<span><b>${plural(newLeads.length, 'new lead')}</b> waiting for you to get in touch.</span></a>`,
+    uninvoiced.length && `<a class="alert warn" href="#/jobs" data-tabset="jobs:tab:uninvoiced">${icon('invoice')}<span><b>${plural(uninvoiced.length, 'completed job')}</b> not invoiced yet.</span></a>`,
+    staleQuotes.length && `<a class="alert info" href="#/quotes">${icon('quote')}<span><b>${plural(staleQuotes.length, 'quote')}</b> sent 3+ days ago with no answer. Time to follow up.</span></a>`,
+    lateJobs.length && `<a class="alert warn" href="#/jobs" data-tabset="jobs:tab:late">${icon('calendar')}<span><b>${plural(lateJobs.length, 'past job')}</b> still marked as scheduled. Mark them complete.</span></a>`,
+    needsBackup && `<button class="alert warn" data-act="exportBackup">${icon('download')}<span><b>Back up your data.</b> ${s.lastBackup ? `Last backup was ${fmtDate(s.lastBackup)}.` : 'You have not made a backup yet.'} Tap to save one now.</span></button>`,
   ].filter(Boolean);
 
   const delta = incLast ? Math.round((inc - incLast) / incLast * 100) : null;
+  const goal = +s.monthlyGoal || 0;
+  const goalPct = goal ? Math.min(100, Math.round(inc / goal * 100)) : 0;
+  const todoItems = [
+    ...followUps.map(l => `<div class="task-row"><span class="task-ic">${icon('funnel')}</span><div class="grow clickable" data-act="editLead" data-id="${l.id}">
+      <div class="title">Follow up with ${esc(l.name)}</div><div class="small">${dueLabel(l.followUp)}${l.service ? ' · ' + esc(l.service) : ''}</div></div></div>`),
+    ...dueTasks.slice(0, 8).map(taskRow),
+  ];
   return head(`${greet}${s.ownerName ? ', ' + esc(firstName(s.ownerName)) : ''}`,
     btn('Job', 'newJob', '', '', 'plus') + btn('Quote', 'newQuote', '', '', 'plus') + btn('Invoice', 'newInvoice', 'btn-primary', '', 'plus'),
-    new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })) + welcome + `
+    `${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}${todayCount ? ` · ${plural(todayCount, 'job')} today` : ''}`) + welcome + `
   <div class="grid grid-4">
     <div class="card stat"><div class="label">Income this month</div><div class="value">${money(inc)}</div>
-      <div class="sub">${delta === null ? 'Payments received' : `${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta)}% vs last month`}</div></div>
-    <div class="card stat"><div class="label">Expenses this month</div><div class="value">${money(exp)}</div><div class="sub">${db.expenses.filter(x => inRange(x.date, m0, m1)).length} expenses</div></div>
+      ${goal ? `<div class="progress" title="${goalPct}% of goal"><i style="width:${goalPct}%"></i></div><div class="sub">${goalPct}% of ${money(goal)} goal</div>`
+        : `<div class="sub">${delta === null ? 'Payments received' : `${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta)}% vs last month`}</div>`}</div>
+    <div class="card stat"><div class="label">Expenses this month</div><div class="value">${money(exp)}</div><div class="sub">${plural(db.expenses.filter(x => inRange(x.date, m0, m1)).length, 'expense')}</div></div>
     <div class="card stat"><div class="label">Net profit this month</div><div class="value" style="color:${inc - exp < 0 ? 'var(--bad)' : 'inherit'}">${money(inc - exp)}</div><div class="sub">${inc ? Math.round((inc - exp) / inc * 100) + '% margin' : '—'}</div></div>
-    <div class="card stat"><div class="label">Owed to you</div><div class="value">${money(ar)}</div><div class="sub">${open.length} open · <span style="color:${overdue.length ? 'var(--bad)' : 'inherit'}">${overdue.length} overdue</span></div></div>
+    <a class="card stat" href="#/invoices" style="color:inherit"><div class="label">Owed to you</div><div class="value">${money(ar)}</div><div class="sub">${open.length} open · <span style="color:${overdue.length ? 'var(--bad)' : 'inherit'}">${overdue.length} overdue</span></div></a>
   </div>
   ${alerts.length ? `<div class="stack" style="margin-top:16px;gap:8px">${alerts.join('')}</div>` : ''}
   <div class="grid grid-2" style="margin-top:16px">
     <div class="card"><div class="card-head"><h2>Next 7 days</h2><a href="#/schedule" class="small">Open schedule →</a></div>
-      ${upcoming.length ? upcoming.slice(0, 8).map(jobListItem).join('') : empty('calendar', 'No jobs scheduled this week.', btn('Schedule a job', 'newJob', 'btn-sm'))}</div>
-    <div class="card"><div class="card-head"><h2>Income vs expenses</h2><a href="#/reports" class="small">Reports →</a></div>
-      ${incExpChart(monthlyRows(monthsInRange(addMonths(monthStart(t), -5), t)))}</div>
+      ${upcoming.length ? upcoming.slice(0, 7).map(jobListItem).join('') + (upcoming.length > 7 ? `<a class="small" href="#/schedule">+${upcoming.length - 7} more</a>` : '')
+        : empty('calendar', 'No jobs scheduled this week.', btn('Schedule a job', 'newJob', 'btn-sm'))}</div>
+    <div class="card"><div class="card-head"><h2>To-dos</h2><a href="#/tasks" class="small">All to-dos →</a></div>
+      ${quickTaskForm()}
+      ${todoItems.length ? todoItems.join('') : '<p class="muted small" style="margin:8px 0 0">Nothing due. Nice work! 🎉</p>'}</div>
   </div>
   <div class="grid grid-2" style="margin-top:16px">
     <div class="card"><div class="card-head"><h2>Unpaid invoices</h2><a href="#/invoices" class="small">All invoices →</a></div>
       ${open.length ? open.sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || '')).slice(0, 6).map(i => `
         <a class="list-item" href="#/invoices/${i.id}" style="color:inherit"><div class="grow"><div class="title">${esc(custName(i.customerId))}</div>
         <div class="muted small">${esc(i.number)} · due ${fmtDate(i.dueDate)}</div></div><div class="right"><div class="num">${money(balance(i))}</div>${badge(invStatus(i))}</div></a>`).join('')
-        : empty('check', 'All caught up — nothing owing.')}</div>
+        : empty('check', 'All caught up. Nothing owing.')}</div>
     <div class="card"><div class="card-head"><h2>Open quotes</h2><a href="#/quotes" class="small">All quotes →</a></div>
-      ${(() => { const qs = db.quotes.filter(q => ['draft', 'sent'].includes(q.status)).slice(-6).reverse();
+      ${(() => { const qs = db.quotes.filter(q => ['draft', 'sent'].includes(quoteStatus(q))).slice(-6).reverse();
         return qs.length ? qs.map(q => `<a class="list-item" href="#/quotes/${q.id}" style="color:inherit"><div class="grow"><div class="title">${esc(custName(q.customerId))}</div>
         <div class="muted small">${esc(q.number)} · ${fmtDate(q.date)}</div></div><div class="right"><div class="num">${money(totals(q).total)}</div>${badge(quoteStatus(q))}</div></a>`).join('')
         : empty('quote', 'No open quotes.', btn('Create a quote', 'newQuote', 'btn-sm')); })()}</div>
-  </div>`;
+  </div>
+  <div class="card" style="margin-top:16px"><div class="card-head"><h2>Income vs expenses · last 6 months</h2><a href="#/reports" class="small">Reports →</a></div>
+    ${incExpChart(monthlyRows(monthsInRange(addMonths(monthStart(t), -5), t)))}</div>`;
 };
 
+/* ----- to-do helpers ----- */
+function dueLabel(d) {
+  if (!d) return '<span class="muted">No date</span>';
+  const t = today(), diff = daysBetween(t, d);
+  if (diff < 0) return `<span style="color:var(--bad)">Overdue · ${fmtDateShort(d)}</span>`;
+  if (diff === 0) return '<span style="color:var(--warn)">Today</span>';
+  if (diff === 1) return '<span class="muted">Tomorrow</span>';
+  return `<span class="muted">${fmtDateShort(d)}</span>`;
+}
+const taskSort = (a, b) => (a.due || '9999').localeCompare(b.due || '9999') || (a.time || '').localeCompare(b.time || '');
+function taskRow(x) {
+  return `<div class="task-row ${x.done ? 'done' : ''}"><input type="checkbox" data-act="toggleTask" data-id="${x.id}" ${x.done ? 'checked' : ''} aria-label="Mark done">
+    <div class="grow clickable" data-act="editTask" data-id="${x.id}"><div class="title">${esc(x.title)}</div>
+    <div class="small">${x.done ? '<span class="muted">Done</span>' : dueLabel(x.due)}${x.time ? ` <span class="muted">· ${fmtTime(x.time)}</span>` : ''}${x.customerId ? ` <span class="muted">· ${esc(custName(x.customerId))}</span>` : ''}</div></div></div>`;
+}
+const quickTaskForm = (custId = '') => `<form class="quick-task" data-customer="${custId}"><input name="title" placeholder="Add a to-do and press Enter…" required>
+  <input name="due" type="date" value="${today()}" aria-label="Due date"><button class="btn btn-sm" type="submit">Add</button></form>`;
+
 function jobListItem(j) {
-  const d = parseD(j.date);
+  const d = j.date ? parseD(j.date) : null;
   return `<a class="list-item" href="#/jobs/${j.id}" style="color:inherit">
-    <div class="date-chip"><span>${d.toLocaleDateString(undefined, { month: 'short' })}</span><b>${d.getDate()}</b></div>
+    <div class="date-chip">${d ? `<span>${d.toLocaleDateString(undefined, { month: 'short' })}</span><b>${d.getDate()}</b>` : '<span>No</span><b style="font-size:.7rem">date</b>'}</div>
     <div class="grow"><div class="title">${esc(j.title)}</div>
     <div class="muted small">${esc(custName(j.customerId))}${j.start ? ' · ' + fmtTime(j.start) : ''}${j.assignedTo ? ' · ' + esc(j.assignedTo) : ''}</div></div>
     ${badge(j.status)}</a>`;
 }
 
 /* ---------- Schedule ---------- */
+const teamMembers = () => [...new Set(db.jobs.map(x => (x.assignedTo || '').trim()).filter(Boolean))].sort();
+function routeUrl(jobs) {
+  const stops = jobs.filter(j => j.status !== 'cancelled').map(j => j.address || cust(j.customerId)?.address).filter(Boolean);
+  if (!stops.length) return '';
+  const dest = stops.pop();
+  return `https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=${encodeURIComponent(dest)}${stops.length ? '&waypoints=' + encodeURIComponent(stops.slice(0, 9).join('|')) : ''}`;
+}
+function dayPanel(day, jobs) {
+  const route = routeUrl(jobs);
+  return `<div class="card"><div class="card-head"><h2>${fmtDateShort(day)}</h2><div class="row">
+      ${route ? `<a class="btn btn-sm" target="_blank" rel="noopener" href="${route}">${icon('route')}Route</a>` : ''}
+      ${btn('Add job', 'newJob', 'btn-sm', `data-date="${day}"`, 'plus')}</div></div>
+    ${jobs.length ? jobs.map(j => `<a class="agenda-item ${j.status}" href="#/jobs/${j.id}">
+        <div class="agenda-time">${j.start ? fmtTime(j.start) : 'Any time'}${j.end ? `<span>${fmtTime(j.end)}</span>` : ''}</div>
+        <div class="grow"><div class="title">${esc(j.title)} ${badge(j.status)}</div>
+        <div class="muted small">${esc(custName(j.customerId))}${j.address ? ' · ' + esc(j.address) : ''}${j.assignedTo ? ' · ' + esc(j.assignedTo) : ''}</div></div>
+        <div class="num">${money(jobValue(j))}</div></a>`).join('')
+      : empty('calendar', 'Nothing scheduled.')}
+    ${jobs.length ? `<div class="muted small" style="margin-top:8px">${jobs.length} job${jobs.length === 1 ? '' : 's'} · ${money(sum(jobs.filter(j => j.status !== 'cancelled'), jobValue))}</div>` : ''}</div>`;
+}
+const evLabel = j => `${j.start ? fmtTime(j.start).replace(':00', '').replace(' ', '').toLowerCase() + ' ' : ''}${esc(j.title)}`;
+
 VIEWS.schedule = () => {
-  const ym = state.calMonth, first = parseD(ym + '-01');
-  const start = addDays(ym + '-01', -first.getDay());
-  const t = today();
+  const t = today(), view = state.calView, team = state.calTeam;
+  const jobs = db.jobs.filter(j => !team || (team === '__none' ? !j.assignedTo : (j.assignedTo || '').trim() === team));
   const byDate = {};
-  for (const j of db.jobs) (byDate[j.date] ||= []).push(j);
-  Object.values(byDate).forEach(a => a.sort((x, y) => (x.start || '').localeCompare(y.start || '')));
-  let cells = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => `<div class="dow">${d}</div>`).join('');
-  for (let i = 0; i < 42; i++) {
-    const d = addDays(start, i), js = byDate[d] || [];
-    if (i === 35 && d.slice(0, 7) !== ym) break;
-    cells += `<div class="day ${d.slice(0, 7) !== ym ? 'other' : ''} ${d === t ? 'today' : ''}" data-day="${d}" style="${d === state.calDay ? 'outline:2px solid var(--primary);outline-offset:-2px' : ''}">
-      <div class="dnum">${+d.slice(8)}</div>
-      ${js.slice(0, 3).map(j => `<div class="ev ${j.status}" title="${esc(j.title)}">${j.start ? fmtTime(j.start).replace(':00', '').replace(' ', '').toLowerCase() + ' ' : ''}${esc(j.title)}</div>`).join('')}
-      ${js.length > 3 ? `<div class="muted small">+${js.length - 3} more</div>` : ''}</div>`;
+  for (const j of jobs) if (j.date) (byDate[j.date] ||= []).push(j);
+  Object.values(byDate).forEach(a => a.sort((x, y) => (x.start || '99').localeCompare(y.start || '99')));
+  const members = teamMembers();
+  let title, body;
+
+  if (view === 'month') {
+    const ym = state.calMonth, first = parseD(ym + '-01');
+    const start = addDays(ym + '-01', -first.getDay());
+    title = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    let cells = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => `<div class="dow">${d}</div>`).join('');
+    for (let i = 0; i < 42; i++) {
+      const d = addDays(start, i), js = byDate[d] || [];
+      if (i === 35 && d.slice(0, 7) !== ym) break;
+      cells += `<div class="day ${d.slice(0, 7) !== ym ? 'other' : ''} ${d === t ? 'today' : ''} ${d === state.calDay ? 'selected' : ''}" data-day="${d}">
+        <div class="dnum">${+d.slice(8)}</div>
+        ${js.slice(0, 3).map(j => `<a class="ev ${j.status}" href="#/jobs/${j.id}" draggable="true" data-drag-job="${j.id}" title="${esc(j.title)} · ${esc(custName(j.customerId))}">${evLabel(j)}</a>`).join('')}
+        ${js.length > 3 ? `<div class="muted small more">+${js.length - 3} more</div>` : ''}</div>`;
+    }
+    body = `<div class="cal">${cells}</div>`;
+  } else if (view === 'week') {
+    const ws = addDays(state.calDay, -parseD(state.calDay).getDay());
+    const we = addDays(ws, 6);
+    title = `${parseD(ws).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} – ${parseD(we).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+    body = `<div class="week">${Array.from({ length: 7 }, (_, i) => {
+      const d = addDays(ws, i), js = byDate[d] || [];
+      return `<div class="wk-day ${d === t ? 'today' : ''} ${d === state.calDay ? 'selected' : ''}" data-day="${d}">
+        <div class="wk-head"><span>${parseD(d).toLocaleDateString(undefined, { weekday: 'short' })}</span><b>${+d.slice(8)}</b>
+          <button class="btn btn-icon wk-add" data-act="newJob" data-date="${d}" aria-label="Add job">${icon('plus')}</button></div>
+        ${js.map(j => `<a class="wk-job ${j.status}" href="#/jobs/${j.id}" draggable="true" data-drag-job="${j.id}">
+          <b>${j.start ? fmtTime(j.start) : 'Any time'}</b><span>${esc(j.title)}</span><span class="muted">${esc(custName(j.customerId))}</span></a>`).join('')}
+        ${js.length ? `<div class="wk-total">${money(sum(js.filter(j => j.status !== 'cancelled'), jobValue))}</div>` : ''}</div>`;
+    }).join('')}</div>
+    <p class="muted small hide-sm" style="margin:8px 0 0">Tip: drag a job to another day to reschedule it.</p>`;
+  } else {
+    title = parseD(state.calDay).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+    body = '';
   }
-  const dayJobs = byDate[state.calDay] || [];
-  return head('Schedule', btn('Today', 'calToday') + btn('New job', 'newJob', 'btn-primary', `data-date="${state.calDay}"`, 'plus')) + `
-  <div class="grid" style="grid-template-columns:minmax(0,1fr)">
-    <div class="card">
-      <div class="cal-head"><button class="btn btn-sm" data-act="calMove" data-n="-1">‹</button>
-        <h2 style="min-width:150px;text-align:center">${first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</h2>
-        <button class="btn btn-sm" data-act="calMove" data-n="1">›</button></div>
-      <div class="cal">${cells}</div>
+  const unscheduled = jobs.filter(j => !j.date && !['completed', 'cancelled'].includes(j.status));
+  return head('Schedule', btn('New job', 'newJob', 'btn-primary', `data-date="${state.calDay}"`, 'plus')) + `
+  <div class="card">
+    <div class="cal-head">
+      <div class="seg">${[['month', 'Month'], ['week', 'Week'], ['day', 'Day']].map(([k, l]) => `<button data-act="calView" data-v="${k}" class="${view === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <div class="row" style="flex-wrap:nowrap"><button class="btn btn-sm" data-act="calMove" data-n="-1" aria-label="Previous">‹</button>
+        <h2 class="cal-title">${title}</h2>
+        <button class="btn btn-sm" data-act="calMove" data-n="1" aria-label="Next">›</button></div>
+      <span class="spacer"></span>
+      ${members.length ? `<select data-act-change="calTeam" style="width:auto" aria-label="Team member"><option value="">Everyone</option>${opts(members, team)}<option value="__none" ${team === '__none' ? 'selected' : ''}>Unassigned</option></select>` : ''}
+      ${btn('Today', 'calToday', 'btn-sm')}
     </div>
-    <div class="card"><div class="card-head"><h2>${fmtDateShort(state.calDay)}</h2>${btn('Add job this day', 'newJob', 'btn-sm', `data-date="${state.calDay}"`, 'plus')}</div>
-      ${dayJobs.length ? dayJobs.map(jobListItem).join('') : empty('calendar', 'Nothing scheduled.')}
-      ${dayJobs.length ? `<div class="muted small" style="margin-top:8px">Day total: ${money(sum(dayJobs.filter(j => j.status !== 'cancelled'), jobValue))}</div>` : ''}</div>
-  </div>`;
+    ${body}
+  </div>
+  <div style="margin-top:16px">${dayPanel(state.calDay, byDate[state.calDay] || [])}</div>
+  ${unscheduled.length ? `<div class="card" style="margin-top:16px"><h2 style="margin-bottom:8px">Not scheduled yet</h2>
+    <p class="muted small" style="margin:0 0 6px">Drag onto the calendar or open a job to give it a date.</p>
+    ${unscheduled.map(j => `<div draggable="true" data-drag-job="${j.id}">${jobListItem(j)}</div>`).join('')}</div>` : ''}`;
 };
 
 /* ---------- Jobs ---------- */
@@ -584,7 +782,7 @@ VIEWS.jobs = id => {
   return head('Jobs', btn('New job', 'newJob', 'btn-primary', '', 'plus')) + `<div class="card">
     ${tabsHTML('jobs', 'tab', [['upcoming', `Upcoming (${count('upcoming')})`], ['late', `Past due (${count('late')})`], ['uninvoiced', `To invoice (${count('uninvoiced')})`], ['completed', 'Completed'], ['all', 'All']], tab)}
     <div class="toolbar"><input type="search" placeholder="Search jobs…" value="${esc(q)}" data-filter="jobs:q"></div>
-    ${list.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Job</th><th class="hide-sm">Customer</th><th class="hide-sm">Assigned</th><th>Status</th><th class="num">Value</th></tr></thead><tbody>
+    ${list.length ? `<div class="show-sm">${list.map(jobListItem).join('')}</div><div class="table-wrap hide-sm"><table><thead><tr><th>Date</th><th>Job</th><th class="hide-sm">Customer</th><th class="hide-sm">Assigned</th><th>Status</th><th class="num">Value</th></tr></thead><tbody>
     ${list.map(j => `<tr class="clickable" data-href="#/jobs/${j.id}"><td>${j.date ? fmtDateShort(j.date) : '<span class="muted">Unscheduled</span>'}<div class="muted small">${fmtTime(j.start)}</div></td>
       <td><b>${esc(j.title)}</b><div class="muted small">${esc(j.address || '')}</div></td><td class="hide-sm">${esc(custName(j.customerId))}</td>
       <td class="hide-sm">${esc(j.assignedTo || '')}</td><td>${badge(j.status)}${j.invoiceId ? ' <span class="badge">invoiced</span>' : ''}</td><td class="num">${money(jobValue(j))}</td></tr>`).join('')}
@@ -592,45 +790,61 @@ VIEWS.jobs = id => {
 };
 
 function jobDetail(id) {
-  const j = byId('jobs', id); if (!j) return empty('jobs', 'Job not found.');
+  const j = byId('jobs', id); if (!j) return empty('jobs', 'Job not found.', '<a class="btn btn-sm" href="#/jobs">Back to jobs</a>');
   const c = cust(j.customerId), inv = j.invoiceId && byId('invoices', j.invoiceId);
   const exps = db.expenses.filter(e => e.jobId === j.id);
   const revenue = jobValue(j), cost = sum(exps, e => e.amount), tax = inv ? totals(inv).tax : totals(j).tax;
   const profit = revenue - tax - cost;
+  const addr = j.address || c?.address || '';
   const statusBtns = {
     scheduled: btn('Start job', 'jobStatus', '', `data-id="${j.id}" data-s="in_progress"`) + btn('Mark complete', 'jobStatus', 'btn-primary', `data-id="${j.id}" data-s="completed"`, 'check'),
     in_progress: btn('Mark complete', 'jobStatus', 'btn-primary', `data-id="${j.id}" data-s="completed"`, 'check'),
     completed: btn('Reopen', 'jobStatus', '', `data-id="${j.id}" data-s="scheduled"`),
     cancelled: btn('Restore', 'jobStatus', '', `data-id="${j.id}" data-s="scheduled"`),
   }[j.status] || '';
+  const vars = { ...custVars(c), date: j.date ? fmtDateShort(j.date) : 'the scheduled day', time: j.start ? ' at ' + fmtTime(j.start) : '' };
+  const msgBtns = c?.phone ? [
+    j.status === 'scheduled' && `<a class="btn btn-sm" href="${smsHref(c.phone, fillTemplate('tplAppt', vars))}">${icon('sms')}Confirm appointment</a>`,
+    ['scheduled', 'in_progress'].includes(j.status) && `<a class="btn btn-sm" href="${smsHref(c.phone, fillTemplate('tplOnWay', vars))}">${icon('truck')}On my way</a>`,
+    j.status === 'completed' && `<a class="btn btn-sm" href="${smsHref(c.phone, fillTemplate('tplReview', vars))}">${icon('star')}Ask for a review</a>`,
+  ].filter(Boolean).join('') : '';
+  const photos = j.photos || [];
+  const margin = revenue - tax > 0 ? Math.round(profit / (revenue - tax) * 100) : null;
   return head(`${esc(j.title)} ${badge(j.status)}`, statusBtns +
     (inv ? `<a class="btn" href="#/invoices/${inv.id}">${icon('invoice')}View invoice</a>` : btn('Create invoice', 'jobToInvoice', j.status === 'completed' ? 'btn-primary' : '', `data-id="${j.id}"`, 'invoice')) +
-    btn('Edit', 'editJob', '', `data-id="${j.id}"`, 'edit'), `<a href="#/jobs">← All jobs</a>`) + `
+    btn('Edit', 'editJob', '', `data-id="${j.id}"`, 'edit'), `<a href="#/jobs">← All jobs</a>${j.seriesId ? ' · Repeating job' : ''}`) + `
   <div class="grid grid-2">
     <div class="card"><h2 style="margin-bottom:10px">Details</h2>
       <div class="stack" style="gap:8px">
-        <div><div class="muted small">Customer</div>${c ? `<a href="#/customers/${c.id}"><b>${esc(c.name)}</b></a>` : '—'}</div>
-        <div><div class="muted small">When</div>${j.date ? fmtDateShort(j.date) : 'Unscheduled'}${j.start ? `, ${fmtTime(j.start)}${j.end ? ' – ' + fmtTime(j.end) : ''}` : ''}</div>
-        ${j.address ? `<div><div class="muted small">Address</div><a target="_blank" rel="noopener" href="https://maps.google.com/?q=${encodeURIComponent(j.address)}">${esc(j.address)} ↗</a></div>` : ''}
+        <div><div class="muted small">Customer</div>${c ? `<a href="#/customers/${c.id}"><b>${esc(c.name)}</b></a>${c.phone ? ` <span class="muted small">${esc(c.phone)}</span>` : ''}` : '—'}</div>
+        <div><div class="muted small">When</div>${j.date ? fmtDateShort(j.date) : 'Not scheduled yet'}${j.start ? `, ${fmtTime(j.start)}${j.end ? ' – ' + fmtTime(j.end) : ''}` : ''}</div>
+        ${addr ? `<div><div class="muted small">Address</div><a target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addr)}">${esc(addr)} ↗</a></div>` : ''}
         ${j.assignedTo ? `<div><div class="muted small">Assigned to</div>${esc(j.assignedTo)}</div>` : ''}
         ${j.quoteId && byId('quotes', j.quoteId) ? `<div><div class="muted small">From quote</div><a href="#/quotes/${j.quoteId}">${esc(byId('quotes', j.quoteId).number)}</a></div>` : ''}
         ${j.notes ? `<div><div class="muted small">Notes</div><div style="white-space:pre-wrap">${esc(j.notes)}</div></div>` : ''}
+        ${c?.notes ? `<div><div class="muted small">Customer notes</div><div style="white-space:pre-wrap">${esc(c.notes)}</div></div>` : ''}
       </div>
-      ${c ? `<div class="row" style="margin-top:14px">${contactBtns(c, `Hi ${firstName(c.name)}, this is ${db.settings.businessName || 'us'} — just confirming your appointment${j.date ? ' on ' + fmtDateShort(j.date) : ''}${j.start ? ' at ' + fmtTime(j.start) : ''}. See you then!`)}</div>` : ''}
+      ${c ? `<div class="row" style="margin-top:14px">${contactBtns(c)}</div>` : ''}
+      ${msgBtns ? `<div class="muted small" style="margin:12px 0 6px">Quick texts</div><div class="row">${msgBtns}</div>` : ''}
     </div>
     <div class="card"><div class="card-head"><h2>Job costing</h2>${btn('Add expense', 'newExpense', 'btn-sm', `data-job="${j.id}"`, 'plus')}</div>
       <div class="grid grid-3" style="gap:8px;margin-bottom:12px">
         <div><div class="muted small">Revenue (pre-tax)</div><b class="num">${money(revenue - tax)}</b></div>
         <div><div class="muted small">Costs</div><b class="num">${money(cost)}</b></div>
-        <div><div class="muted small">Profit</div><b class="num" style="color:${profit < 0 ? 'var(--bad)' : 'var(--good)'}">${money(profit)}</b></div>
+        <div><div class="muted small">Profit</div><b class="num" style="color:${profit < 0 ? 'var(--bad)' : 'var(--good)'}">${money(profit)}</b>${margin !== null ? ` <span class="muted small">${margin}%</span>` : ''}</div>
       </div>
-      ${exps.length ? exps.map(e => `<div class="list-item clickable" data-act="editExpense" data-id="${e.id}" style="cursor:pointer"><div class="grow"><div class="title">${esc(e.vendor || e.category)}</div><div class="muted small">${fmtDate(e.date)} · ${esc(e.category)}</div></div><span class="num">${money(e.amount)}</span></div>`).join('')
+      ${exps.length ? exps.map(e => `<div class="list-item clickable" data-act="editExpense" data-id="${e.id}"><div class="grow"><div class="title">${esc(e.vendor || e.category)}</div><div class="muted small">${fmtDate(e.date)} · ${esc(e.category)}</div></div><span class="num">${money(e.amount)}</span></div>`).join('')
         : '<p class="muted small">Link materials, subcontractor and other costs to this job to see your real profit.</p>'}
     </div>
   </div>
+  <div class="card"><div class="card-head"><h2>Photos</h2>
+    <label class="btn btn-sm">${icon('camera')}Add photos<input type="file" accept="image/*" multiple class="js-job-photos" data-id="${j.id}" hidden></label></div>
+    ${photos.length ? `<div class="photo-grid">${photos.map(ph => `<button class="photo" data-act="viewPhoto" data-id="${j.id}" data-pid="${ph.id}" aria-label="View photo"><img src="${ph.src}" alt="" loading="lazy"></button>`).join('')}</div>`
+      : '<p class="muted small" style="margin:0">Add before and after photos to protect yourself and show customers your work.</p>'}</div>
   <div class="card"><h2 style="margin-bottom:10px">Line items</h2>${itemsTable(inv || j)}
     ${inv ? `<p class="muted small">Showing the line items from invoice ${esc(inv.number)}.</p>` : ''}</div>
   <div class="row" style="margin-top:16px">${btn('Duplicate', 'dupJob', 'btn-sm', `data-id="${j.id}"`)}
+    ${btn('Add to-do', 'newTask', 'btn-sm', `data-cust="${j.customerId || ''}"`)}
     ${j.status !== 'cancelled' ? btn('Cancel job', 'jobStatus', 'btn-sm', `data-id="${j.id}" data-s="cancelled"`) : ''}
     ${j.status === 'completed' && !j.invoiceId ? btn(j.noInvoice ? 'Needs invoice' : 'No invoice needed', 'toggleNoInvoice', 'btn-sm', `data-id="${j.id}"`) : ''}
     ${btn('Delete', 'deleteJob', 'btn-sm btn-danger', `data-id="${j.id}"`)}</div>`;
@@ -639,22 +853,77 @@ function jobDetail(id) {
 function contactBtns(c, smsText = '') {
   return [
     c.phone && `<a class="btn btn-sm" href="tel:${esc(c.phone)}">${icon('phone')}Call</a>`,
-    c.phone && `<a class="btn btn-sm" href="sms:${esc(c.phone)}${smsText ? '?&body=' + encodeURIComponent(smsText) : ''}">${icon('sms')}Text</a>`,
+    c.phone && `<a class="btn btn-sm" href="${smsHref(c.phone, smsText)}">${icon('sms')}Text</a>`,
     c.email && `<a class="btn btn-sm" href="mailto:${esc(c.email)}">${icon('mail')}Email</a>`,
-    c.address && `<a class="btn btn-sm" target="_blank" rel="noopener" href="https://maps.google.com/?q=${encodeURIComponent(c.address)}">${icon('map')}Directions</a>`,
+    c.address && `<a class="btn btn-sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(c.address)}">${icon('map')}Directions</a>`,
   ].filter(Boolean).join('');
 }
+
+/* ---------- Leads ---------- */
+VIEWS.leads = () => {
+  const showClosed = filt('leads', 'closed', '') === '1';
+  const q = filt('leads', 'q', '').toLowerCase();
+  const stages = showClosed ? LEAD_STAGES : LEAD_STAGES.slice(0, 3);
+  const list = db.leads.filter(l => !q || `${l.name} ${l.service} ${l.phone} ${l.email} ${l.address}`.toLowerCase().includes(q));
+  const openLeads = db.leads.filter(l => !['won', 'lost'].includes(l.stage));
+  const since = addDays(today(), -90);
+  const recentWon = db.leads.filter(l => l.stage === 'won' && (l.closedAt || l.createdAt) >= since).length;
+  const recentLost = db.leads.filter(l => l.stage === 'lost' && (l.closedAt || l.createdAt) >= since).length;
+  return head('Leads', btn('New lead', 'newLead', 'btn-primary', '', 'plus'), 'Track every enquiry from first call to booked job.') + `
+  <div class="grid grid-3">
+    <div class="card stat"><div class="label">Open leads</div><div class="value">${openLeads.length}</div><div class="sub">${db.leads.filter(l => l.stage === 'new').length} not contacted yet</div></div>
+    <div class="card stat"><div class="label">Pipeline value</div><div class="value">${money(sum(openLeads, l => l.value))}</div><div class="sub">Estimated</div></div>
+    <div class="card stat"><div class="label">Win rate · 90 days</div><div class="value">${recentWon + recentLost ? Math.round(recentWon / (recentWon + recentLost) * 100) + '%' : '—'}</div><div class="sub">${recentWon} won · ${recentLost} lost</div></div>
+  </div>
+  <div class="toolbar" style="margin-top:16px"><input type="search" placeholder="Search leads…" value="${esc(q)}" data-filter="leads:q">
+    <label class="check"><input type="checkbox" data-act="toggleClosedLeads" ${showClosed ? 'checked' : ''}> Show won &amp; lost</label></div>
+  <div class="kanban">${stages.map(([k, l]) => {
+    const items = list.filter(x => x.stage === k).sort((a, b) => (a.followUp || '9999').localeCompare(b.followUp || '9999') || b.createdAt.localeCompare(a.createdAt));
+    return `<div class="kanban-col" data-stage="${k}"><div class="kanban-head"><b>${l}</b><span class="muted small">${items.length}${items.length ? ' · ' + money(sum(items, x => x.value)) : ''}</span></div>
+      ${items.map(x => `<div class="lead-card" draggable="true" data-drag-lead="${x.id}" data-act="editLead" data-id="${x.id}" tabindex="0">
+        <div class="title">${esc(x.name)}</div>
+        ${x.service ? `<div class="small">${esc(x.service)}</div>` : ''}
+        <div class="row small" style="margin-top:6px;gap:6px">${+x.value ? `<b class="num">${money(x.value)}</b>` : ''}
+          ${x.followUp && !['won', 'lost'].includes(x.stage) ? `<span>${icon('calendar').replace('<svg', '<svg style="width:12px;height:12px;vertical-align:-1px"')} ${dueLabel(x.followUp)}</span>` : ''}
+          ${x.source ? `<span class="badge">${esc(x.source)}</span>` : ''}</div>
+      </div>`).join('') || '<div class="muted small kanban-empty">Drop leads here</div>'}
+      ${k === 'new' ? `<button class="btn btn-sm" style="width:100%;margin-top:6px" data-act="newLead">${icon('plus')}Add lead</button>` : ''}</div>`;
+  }).join('')}</div>
+  <p class="muted small hide-sm">Tip: drag a card to move it to the next stage.</p>`;
+};
+
+/* ---------- To-dos ---------- */
+VIEWS.tasks = () => {
+  const tab = filt('tasks', 'tab', 'open'), t = today();
+  const open = db.tasks.filter(x => !x.done).sort(taskSort);
+  const groups = [
+    ['Overdue', open.filter(x => x.due && x.due < t)], ['Today', open.filter(x => x.due === t)],
+    ['Upcoming', open.filter(x => x.due && x.due > t)], ['No date', open.filter(x => !x.due)],
+  ].filter(g => g[1].length);
+  const done = db.tasks.filter(x => x.done).sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || '')).slice(0, 100);
+  return head('To-dos', btn('New to-do', 'newTask', 'btn-primary', '', 'plus'), 'Reminders, call-backs and anything else you need to remember.') + `<div class="card">
+    ${tabsHTML('tasks', 'tab', [['open', `To do (${open.length})`], ['done', 'Done']], tab)}
+    ${tab === 'open' ? quickTaskForm() + (groups.length ? groups.map(([l, items]) => `<h3 class="group-label">${l}</h3>${items.map(taskRow).join('')}`).join('') : empty('todo', 'You’re all caught up.'))
+      : (done.length ? done.map(taskRow).join('') + `<div style="margin-top:12px">${btn('Clear completed', 'clearDoneTasks', 'btn-sm')}</div>` : empty('todo', 'Nothing completed yet.'))}
+  </div>`;
+};
 
 /* ---------- Customers ---------- */
 VIEWS.customers = id => {
   if (id) return customerDetail(id);
-  const q = filt('customers', 'q', '').toLowerCase();
+  const q = filt('customers', 'q', '').toLowerCase(), sort = filt('customers', 'sort', 'name');
+  const stats = Object.fromEntries(db.customers.map(c => [c.id, custStats(c.id)]));
   const list = db.customers.filter(c => !q || `${c.name} ${c.email} ${c.phone} ${c.address} ${c.tags}`.toLowerCase().includes(q))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort(sort === 'revenue' ? (a, b) => stats[b.id].paid - stats[a.id].paid : sort === 'owing' ? (a, b) => stats[b.id].owing - stats[a.id].owing
+      : sort === 'recent' ? (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') : (a, b) => a.name.localeCompare(b.name));
   return head('Customers', btn('Import CSV', 'importCustomers', '', '', 'download') + btn('New customer', 'newCustomer', 'btn-primary', '', 'plus'), `${db.customers.length} total`) + `<div class="card">
-    <div class="toolbar"><input type="search" placeholder="Search name, phone, email, address…" value="${esc(q)}" data-filter="customers:q"></div>
-    ${list.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th class="hide-sm">Phone</th><th class="hide-sm">Email</th><th class="num">Lifetime</th><th class="num">Owing</th></tr></thead><tbody>
-    ${list.map(c => { const s = custStats(c.id); return `<tr class="clickable" data-href="#/customers/${c.id}"><td><b>${esc(c.name)}</b><div class="muted small">${esc(c.address || '')}</div></td>
+    <div class="toolbar"><input type="search" placeholder="Search name, phone, email, address…" value="${esc(q)}" data-filter="customers:q">
+      <select data-filter="customers:sort" style="width:auto" aria-label="Sort">${opts([['name', 'Sort: Name'], ['recent', 'Sort: Newest'], ['revenue', 'Sort: Top revenue'], ['owing', 'Sort: Owing']], sort)}</select></div>
+    ${list.length ? `<div class="show-sm">${list.map(c => { const s = stats[c.id]; return `<a class="list-item" style="color:inherit" href="#/customers/${c.id}"><div class="grow">
+      <div class="title">${esc(c.name)}</div><div class="muted small">${esc(c.phone || c.email || c.address || '')}</div></div>
+      <div class="right">${s.owing > 0 ? `<div class="num" style="color:var(--bad)">${money(s.owing)}</div><div class="muted small">owing</div>` : `<div class="num muted">${money(s.paid)}</div>`}</div></a>`; }).join('')}</div>
+    <div class="table-wrap hide-sm"><table><thead><tr><th>Name</th><th class="hide-sm">Phone</th><th class="hide-sm">Email</th><th class="num">Lifetime</th><th class="num">Owing</th></tr></thead><tbody>
+    ${list.map(c => { const s = stats[c.id]; return `<tr class="clickable" data-href="#/customers/${c.id}"><td><b>${esc(c.name)}</b><div class="muted small">${esc(c.address || '')}</div></td>
       <td class="hide-sm">${esc(c.phone || '')}</td><td class="hide-sm">${esc(c.email || '')}</td><td class="num">${money(s.paid)}</td>
       <td class="num" style="color:${s.owing > 0 ? 'var(--bad)' : 'inherit'}">${s.owing > 0 ? money(s.owing) : '—'}</td></tr>`; }).join('')}
     </tbody></table></div>` : empty('users', q ? 'No matches.' : 'No customers yet.', q ? '' : btn('Add your first customer', 'newCustomer', 'btn-sm'))}</div>`;
@@ -664,30 +933,68 @@ function custStats(cid) {
   return { paid: sum(invs, paidAmt) + sum(db.incomes.filter(i => i.customerId === cid), i => i.amount), owing: sum(invs.filter(isOpenInv), balance) };
 }
 function customerDetail(id) {
-  const c = cust(id); if (!c) return empty('users', 'Customer not found.');
+  const c = cust(id); if (!c) return empty('users', 'Customer not found.', '<a class="btn btn-sm" href="#/customers">Back to customers</a>');
   const s = custStats(id);
-  const jobs = db.jobs.filter(j => j.customerId === id).sort((a, b) => b.date.localeCompare(a.date));
+  const jobs = db.jobs.filter(j => j.customerId === id).sort((a, b) => (b.date || '9999').localeCompare(a.date || '9999'));
   const quotes = db.quotes.filter(q => q.customerId === id).reverse();
   const invs = db.invoices.filter(i => i.customerId === id).reverse();
+  const tasks = db.tasks.filter(x => x.customerId === id).sort((a, b) => (a.done - b.done) || taskSort(a, b));
+  const nextJob = jobs.filter(j => j.date >= today() && j.status === 'scheduled').sort((a, b) => a.date.localeCompare(b.date))[0];
   const tab = filt('customer', 'tab', 'jobs');
   const lists = {
     jobs: jobs.length ? jobs.map(jobListItem).join('') : empty('jobs', 'No jobs yet.'),
     quotes: quotes.length ? quotes.map(q => `<a class="list-item" style="color:inherit" href="#/quotes/${q.id}"><div class="grow"><div class="title">${esc(q.number)}</div><div class="muted small">${fmtDate(q.date)}</div></div><span class="num">${money(totals(q).total)}</span>${badge(quoteStatus(q))}</a>`).join('') : empty('quote', 'No quotes yet.'),
     invoices: invs.length ? invs.map(i => `<a class="list-item" style="color:inherit" href="#/invoices/${i.id}"><div class="grow"><div class="title">${esc(i.number)}</div><div class="muted small">${fmtDate(i.date)}</div></div><span class="num">${money(totals(i).total)}</span>${badge(invStatus(i))}</a>`).join('') : empty('invoice', 'No invoices yet.'),
+    tasks: quickTaskForm(id) + (tasks.length ? tasks.map(taskRow).join('') : '<p class="muted small">No to-dos for this customer.</p>'),
   };
   return head(esc(c.name), btn('Edit', 'editCustomer', '', `data-id="${id}"`, 'edit') + btn('Job', 'newJob', '', `data-cust="${id}"`, 'plus') +
     btn('Quote', 'newQuote', '', `data-cust="${id}"`, 'plus') + btn('Invoice', 'newInvoice', 'btn-primary', `data-cust="${id}"`, 'plus'), '<a href="#/customers">← All customers</a>') + `
   <div class="grid grid-3">
     <div class="card"><h2 style="margin-bottom:8px">Contact</h2>
       <div class="stack" style="gap:6px">${c.phone ? `<div>${esc(c.phone)}</div>` : ''}${c.email ? `<div>${esc(c.email)}</div>` : ''}${c.address ? `<div>${esc(c.address)}</div>` : ''}
-      ${c.tags ? `<div>${c.tags.split(',').map(t => `<span class="badge">${esc(t.trim())}</span>`).join(' ')}</div>` : ''}
-      ${c.notes ? `<div class="muted small" style="white-space:pre-wrap">${esc(c.notes)}</div>` : ''}</div>
+      ${c.tags || c.source ? `<div>${[c.source, ...(c.tags || '').split(',')].map(x => (x || '').trim()).filter(Boolean).map(x => `<span class="badge">${esc(x)}</span>`).join(' ')}</div>` : ''}
+      ${c.notes ? `<div class="muted small" style="white-space:pre-wrap">${esc(c.notes)}</div>` : ''}
+      ${!c.phone && !c.email && !c.address ? '<p class="muted small">No contact details yet.</p>' : ''}</div>
       <div class="row" style="margin-top:12px">${contactBtns(c)}</div></div>
-    <div class="card stat"><div class="label">Lifetime revenue</div><div class="value">${money(s.paid)}</div><div class="sub">${jobs.filter(j => j.status === 'completed').length} completed jobs</div></div>
-    <div class="card stat"><div class="label">Currently owing</div><div class="value" style="color:${s.owing ? 'var(--bad)' : 'inherit'}">${money(s.owing)}</div><div class="sub">Customer since ${fmtDate(c.createdAt)}</div></div>
+    <div class="card stat"><div class="label">Lifetime revenue</div><div class="value">${money(s.paid)}</div>
+      <div class="sub">${jobs.filter(j => j.status === 'completed').length} completed jobs${nextJob ? ` · next visit ${fmtDateShort(nextJob.date)}` : ''}</div></div>
+    <div class="card stat"><div class="label">Currently owing</div><div class="value" style="color:${s.owing ? 'var(--bad)' : 'inherit'}">${money(s.owing)}</div>
+      <div class="sub">Customer since ${fmtDate(c.createdAt)}</div>
+      ${s.owing ? `<a class="btn btn-sm" style="margin-top:10px" href="#/statement/${id}">${icon('statement')}Statement</a>` : ''}</div>
   </div>
-  <div class="card">${tabsHTML('customer', 'tab', [['jobs', `Jobs (${jobs.length})`], ['quotes', `Quotes (${quotes.length})`], ['invoices', `Invoices (${invs.length})`]], tab)}${lists[tab]}</div>
+  <div class="card">${tabsHTML('customer', 'tab', [['jobs', `Jobs (${jobs.length})`], ['quotes', `Quotes (${quotes.length})`], ['invoices', `Invoices (${invs.length})`], ['tasks', `To-dos (${tasks.filter(x => !x.done).length})`]], tab)}${lists[tab]}</div>
   <div class="row" style="margin-top:16px">${btn('Delete customer', 'deleteCustomer', 'btn-sm btn-danger', `data-id="${id}"`)}</div>`;
+}
+
+/* ---------- Customer statement ---------- */
+VIEWS.statement = id => {
+  const c = cust(id); if (!c) return empty('users', 'Customer not found.');
+  const s = db.settings, open = db.invoices.filter(i => i.customerId === id && isOpenInv(i)).sort((a, b) => a.date.localeCompare(b.date));
+  return head('Statement', `<button class="btn btn-primary" data-act="printPage">${icon('print')}Print / PDF</button>`, `<a href="#/customers/${id}">← ${esc(c.name)}</a>`) + `
+  <div class="doc">
+    <div class="doc-top"><div>${bizBlock()}</div>
+      <div><h1>STATEMENT</h1><div class="meta"><div><span>Date</span><b>${fmtDate(today())}</b></div></div></div></div>
+    <div class="bill-to"><div class="lbl">Account</div><b>${esc(c.name)}</b><div style="white-space:pre-line;color:#444">${esc([c.address, c.email].filter(Boolean).join('\n'))}</div></div>
+    <table><thead><tr><th>Invoice</th><th>Date</th><th>Due</th><th class="num">Total</th><th class="num">Paid</th><th class="num">Balance</th></tr></thead><tbody>
+      ${open.map(i => `<tr><td>${esc(i.number)}</td><td>${fmtDate(i.date)}</td><td>${fmtDate(i.dueDate)}${invStatus(i) === 'overdue' ? ' <b style="color:#b91c1c">overdue</b>' : ''}</td>
+        <td class="num">${money(totals(i).total)}</td><td class="num">${money(paidAmt(i))}</td><td class="num">${money(balance(i))}</td></tr>`).join('') || '<tr><td colspan="6">No open invoices.</td></tr>'}
+    </tbody></table>
+    <div class="totals"><div class="grand"><span>Total due</span><span>${money(sum(open, balance))}</span></div></div>
+    ${payBlock()}
+  </div>`;
+};
+function bizBlock() {
+  const s = db.settings;
+  return `${s.logo ? `<img class="doc-logo" src="${s.logo}" alt="">` : ''}
+    <div style="font-weight:700;font-size:16px">${esc(s.businessName || 'Your Business Name')}</div>
+    <div style="white-space:pre-line;color:#444">${esc([s.address, s.phone, s.email, s.website].filter(Boolean).join('\n'))}</div>
+    ${s.taxNumber ? `<div style="color:#444">${esc(s.taxName)} # ${esc(s.taxNumber)}</div>` : ''}`;
+}
+function payBlock() {
+  const s = db.settings;
+  if (!s.paymentInstructions && !s.paymentLink) return '';
+  return `<div class="notes"><div class="lbl">How to pay</div>${esc(s.paymentInstructions)}
+    ${s.paymentLink ? `<div style="margin-top:6px">Pay online: <a href="${esc(s.paymentLink)}" target="_blank" rel="noopener">${esc(s.paymentLink)}</a></div>` : ''}</div>`;
 }
 
 /* ---------- Quotes ---------- */
@@ -698,13 +1005,18 @@ VIEWS.quotes = id => {
     closed: x => ['declined', 'expired'].includes(quoteStatus(x)), all: () => true };
   const list = db.quotes.filter(tests[tab]).filter(x => !q || `${x.number} ${custName(x.customerId)}`.toLowerCase().includes(q)).reverse();
   const sent = db.quotes.filter(x => x.status !== 'draft').length, won = db.quotes.filter(x => ['approved', 'converted'].includes(x.status)).length;
-  return head('Quotes', btn('New quote', 'newQuote', 'btn-primary', '', 'plus'), sent ? `Win rate: ${Math.round(won / sent * 100)}% (${won} of ${sent} sent)` : '') + `<div class="card">
+  const openVal = sum(db.quotes.filter(tests.open), x => totals(x).total);
+  return head('Quotes', btn('New quote', 'newQuote', 'btn-primary', '', 'plus'), [sent ? `Win rate ${Math.round(won / sent * 100)}% (${won} of ${sent} sent)` : '', openVal ? `${money(openVal)} in open quotes` : ''].filter(Boolean).join(' · ')) + `<div class="card">
     ${tabsHTML('quotes', 'tab', [['open', 'Open'], ['approved', 'Won'], ['closed', 'Declined / expired'], ['all', 'All']], tab)}
     <div class="toolbar"><input type="search" placeholder="Search quotes…" value="${esc(q)}" data-filter="quotes:q"></div>
     ${list.length ? docTable(list, 'quotes', x => quoteStatus(x), x => x.validUntil ? 'Valid to ' + fmtDate(x.validUntil) : '') : empty('quote', 'No quotes here.', btn('New quote', 'newQuote', 'btn-sm'))}</div>`;
 };
 function docTable(list, route, statusFn, extraFn) {
-  return `<div class="table-wrap"><table><thead><tr><th>Number</th><th>Customer</th><th class="hide-sm">Date</th><th>Status</th><th class="num">Total</th>${route === 'invoices' ? '<th class="num">Balance</th>' : ''}</tr></thead><tbody>
+  const isInv = route === 'invoices';
+  return `<div class="show-sm">${list.map(x => `<a class="list-item" style="color:inherit" href="#/${route}/${x.id}"><div class="grow">
+      <div class="title">${esc(custName(x.customerId))}</div><div class="muted small">${esc(x.number)} · ${extraFn(x) || fmtDate(x.date)}</div></div>
+      <div class="right"><div class="num">${money(isInv && balance(x) > 0 ? balance(x) : totals(x).total)}</div>${badge(statusFn(x))}</div></a>`).join('')}</div>
+    <div class="table-wrap hide-sm"><table><thead><tr><th>Number</th><th>Customer</th><th class="hide-sm">Date</th><th>Status</th><th class="num">Total</th>${route === 'invoices' ? '<th class="num">Balance</th>' : ''}</tr></thead><tbody>
     ${list.map(x => `<tr class="clickable" data-href="#/${route}/${x.id}"><td><b>${esc(x.number)}</b></td><td>${esc(custName(x.customerId))}</td>
     <td class="hide-sm">${fmtDate(x.date)}<div class="muted small">${extraFn(x)}</div></td><td>${badge(statusFn(x))}</td><td class="num">${money(totals(x).total)}</td>
     ${route === 'invoices' ? `<td class="num">${balance(x) > 0 ? money(balance(x)) : '—'}</td>` : ''}</tr>`).join('')}
@@ -718,33 +1030,37 @@ VIEWS.invoices = id => {
   const tests = { unpaid: isOpenInv, overdue: x => invStatus(x) === 'overdue', draft: x => invStatus(x) === 'draft', paid: x => invStatus(x) === 'paid', all: () => true };
   const list = db.invoices.filter(tests[tab]).filter(x => !q || `${x.number} ${custName(x.customerId)}`.toLowerCase().includes(q)).reverse();
   const open = db.invoices.filter(isOpenInv);
-  return head('Invoices', btn('New invoice', 'newInvoice', 'btn-primary', '', 'plus'), `${money(sum(open, balance))} outstanding across ${open.length} invoice${open.length === 1 ? '' : 's'}`) + `<div class="card">
-    ${tabsHTML('invoices', 'tab', [['unpaid', 'Unpaid'], ['overdue', 'Overdue'], ['draft', 'Drafts'], ['paid', 'Paid'], ['all', 'All']], tab)}
+  const overdue = open.filter(tests.overdue);
+  return head('Invoices', btn('New invoice', 'newInvoice', 'btn-primary', '', 'plus'),
+    `${money(sum(open, balance))} outstanding across ${open.length} invoice${open.length === 1 ? '' : 's'}${overdue.length ? ` · <span style="color:var(--bad)">${money(sum(overdue, balance))} overdue</span>` : ''}`) + `<div class="card">
+    ${tabsHTML('invoices', 'tab', [['unpaid', `Unpaid (${open.length})`], ['overdue', `Overdue (${overdue.length})`], ['draft', 'Drafts'], ['paid', 'Paid'], ['all', 'All']], tab)}
     <div class="toolbar"><input type="search" placeholder="Search invoices…" value="${esc(q)}" data-filter="invoices:q"></div>
-    ${list.length ? docTable(list, 'invoices', invStatus, x => x.dueDate ? 'Due ' + fmtDate(x.dueDate) : '') : empty('invoice', 'No invoices here.', btn('New invoice', 'newInvoice', 'btn-sm'))}</div>`;
+    ${list.length ? docTable(list, 'invoices', invStatus, x => {
+      if (invStatus(x) === 'overdue') return `<span style="color:var(--bad)">${daysBetween(x.dueDate, today())} days overdue</span>`;
+      return x.dueDate && isOpenInv(x) ? 'Due ' + fmtDate(x.dueDate) : '';
+    }) : empty('invoice', 'No invoices here.', btn('New invoice', 'newInvoice', 'btn-sm'))}</div>`;
 };
 
 /* ---------- Invoice / quote document ---------- */
+const depositAmt = q => +q.depositPct ? round2(totals(q).total * q.depositPct / 100) : 0;
 function docHTML(type, d) {
   const s = db.settings, c = cust(d.customerId) || {}, t = totals(d), isInv = type === 'invoice';
   const paid = isInv ? paidAmt(d) : 0, status = isInv ? invStatus(d) : quoteStatus(d);
   return `<div class="doc">
     <div class="doc-top">
-      <div>${s.logo ? `<img class="doc-logo" src="${s.logo}" alt="">` : ''}
-        <div style="font-weight:700;font-size:16px">${esc(s.businessName || 'Your Business Name')}</div>
-        <div style="white-space:pre-line;color:#444">${esc([s.address, s.phone, s.email, s.website].filter(Boolean).join('\n'))}</div>
-        ${s.taxNumber ? `<div style="color:#444">${esc(s.taxName)} # ${esc(s.taxNumber)}</div>` : ''}</div>
+      <div>${bizBlock()}</div>
       <div><h1>${isInv ? 'INVOICE' : 'QUOTE'}</h1>
         <div class="meta"><div><span>${isInv ? 'Invoice' : 'Quote'} #</span><b>${esc(d.number)}</b></div>
         <div><span>Date</span><b>${fmtDate(d.date)}</b></div>
         ${isInv && d.dueDate ? `<div><span>Due</span><b>${fmtDate(d.dueDate)}</b></div>` : ''}
-        ${!isInv && d.validUntil ? `<div><span>Valid until</span><b>${fmtDate(d.validUntil)}</b></div>` : ''}</div></div>
+        ${!isInv && d.validUntil ? `<div><span>Valid until</span><b>${fmtDate(d.validUntil)}</b></div>` : ''}
+        ${isInv && status !== 'paid' && status !== 'void' ? `<div><span>Amount due</span><b>${money(balance(d))}</b></div>` : ''}</div></div>
     </div>
     <div class="bill-to"><div class="lbl">${isInv ? 'Bill to' : 'Prepared for'}</div><b>${esc(c.name || '')}</b>
       <div style="white-space:pre-line;color:#444">${esc([c.address, c.phone, c.email].filter(Boolean).join('\n'))}</div>
       ${d.serviceAddress && d.serviceAddress !== c.address ? `<div style="margin-top:6px"><span class="lbl">Service address:</span> ${esc(d.serviceAddress)}</div>` : ''}</div>
     <table><thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead><tbody>
-      ${(d.items || []).map(it => `<tr><td>${esc(it.desc)}</td><td class="num">${+it.qty}</td><td class="num">${money(it.price)}</td><td class="num">${money(it.qty * it.price)}</td></tr>`).join('')}
+      ${(d.items || []).map(it => `<tr><td>${esc(it.desc)}${it.details ? `<div style="color:#666;font-size:12px;white-space:pre-line">${esc(it.details)}</div>` : ''}</td><td class="num">${+it.qty}</td><td class="num">${money(it.price)}</td><td class="num">${money(it.qty * it.price)}</td></tr>`).join('')}
     </tbody></table>
     <div class="totals">
       <div><span>Subtotal</span><span>${money(t.sub)}</span></div>
@@ -752,58 +1068,61 @@ function docHTML(type, d) {
       <div><span>${esc(s.taxName)} (${t.rate}%)</span><span>${money(t.tax)}</span></div>
       <div class="grand"><span>Total</span><span>${money(t.total)}</span></div>
       ${isInv && paid ? `<div><span>Paid</span><span>−${money(paid)}</span></div><div class="grand"><span>Balance due</span><span>${money(balance(d))}</span></div>` : ''}
+      ${!isInv && depositAmt(d) ? `<div><span>Deposit required (${+d.depositPct}%)</span><span>${money(depositAmt(d))}</span></div>` : ''}
     </div>
     ${status === 'paid' ? '<div class="paid-stamp">PAID</div>' : ''}
     ${d.notes ? `<div class="notes">${esc(d.notes)}</div>` : ''}
-    ${isInv && s.paymentInstructions && status !== 'paid' ? `<div class="notes"><div class="lbl">How to pay</div>${esc(s.paymentInstructions)}</div>` : ''}
+    ${isInv && status !== 'paid' ? payBlock() : ''}
     ${!isInv ? `<div class="notes" style="margin-top:40px;display:flex;gap:40px;flex-wrap:wrap"><div>Accepted by: ________________________</div><div>Date: ______________</div></div>` : ''}
   </div>`;
 }
-function docMessage(type, d) {
-  const s = db.settings, c = cust(d.customerId) || {}, t = totals(d);
-  const biz = s.businessName || 'us';
-  if (type === 'invoice') {
-    const bal = balance(d);
-    return `Hi ${firstName(c.name)},\n\nHere is invoice ${d.number} from ${biz} for ${money(t.total)}${bal !== t.total ? ` (balance due ${money(bal)})` : ''}${d.dueDate ? `, due ${fmtDate(d.dueDate)}` : ''}.\n\n` +
-      (d.items || []).map(it => `• ${it.desc} — ${money(it.qty * it.price)}`).join('\n') +
-      `\n\n${s.paymentInstructions || ''}\n\nThank you!\n${s.ownerName || biz}${s.phone ? '\n' + s.phone : ''}`;
-  }
-  return `Hi ${firstName(c.name)},\n\nThanks for the opportunity! Here is quote ${d.number} from ${biz} for ${money(t.total)}${d.validUntil ? `, valid until ${fmtDate(d.validUntil)}` : ''}.\n\n` +
-    (d.items || []).map(it => `• ${it.desc} — ${money(it.qty * it.price)}`).join('\n') +
-    `\n\nJust reply to let me know if you'd like to go ahead and we'll get you booked in.\n\n${s.ownerName || biz}${s.phone ? '\n' + s.phone : ''}`;
+function docMessage(type, d, kind = 'send') {
+  const c = cust(d.customerId), t = totals(d);
+  const items = (d.items || []).map(it => `• ${it.desc}: ${money(it.qty * it.price)}`).join('\n');
+  const vars = { ...custVars(c), number: d.number, total: money(t.total), balance: money(balance(d)), due: d.dueDate ? fmtDate(d.dueDate) : 'on receipt',
+    valid: d.validUntil ? fmtDate(d.validUntil) : '30 days', items };
+  if (type === 'invoice') return fillTemplate(kind === 'reminder' ? 'tplReminder' : 'tplInvoice', vars);
+  return fillTemplate(kind === 'followup' ? 'tplQuoteFollow' : 'tplQuote', vars);
 }
 function docView(type, id) {
   const coll = type === 'invoice' ? 'invoices' : 'quotes';
-  const d = byId(coll, id); if (!d) return empty(type, 'Not found.');
+  const d = byId(coll, id); if (!d) return empty(type, 'Not found.', `<a class="btn btn-sm" href="#/${coll}">Back</a>`);
   const c = cust(d.customerId) || {};
   const isInv = type === 'invoice';
   const status = isInv ? invStatus(d) : quoteStatus(d);
-  const a = (l, act, cls = '', ic = '') => btn(l, act, cls, `data-id="${id}" data-type="${type}"`, ic);
+  const a = (l, act, cls = '', ic = '', extra = '') => btn(l, act, cls, `data-id="${id}" data-type="${type}" ${extra}`, ic);
+  const send = a('Email', 'docEmail', '', 'mail') + a('Text', 'docText', '', 'sms');
+  const remind = a('Send reminder', 'docRemind', '', 'sms');
+  const depInv = !isInv && d.depositInvoiceId && byId('invoices', d.depositInvoiceId);
   const actions = isInv
-    ? (status !== 'void' ? (status !== 'paid' ? a('Record payment', 'recordPayment', 'btn-primary', 'check') : '') + a('Email', 'docEmail', '', 'mail') + a('Text', 'docText', '', 'sms') +
-      a('Print / PDF', 'docPrint', '', 'print') + a('Edit', 'editDoc', '', 'edit') : '')
+    ? (status === 'void' ? '' : (status !== 'paid' ? a('Record payment', 'recordPayment', 'btn-primary', 'check') : '') +
+      (status === 'overdue' || status === 'partial' ? remind : status === 'paid' ? '' : send) + a('Print / PDF', 'docPrint', '', 'print') + a('Edit', 'editDoc', '', 'edit'))
     : (['draft', 'sent', 'expired'].includes(status) ? a('Approve', 'quoteApprove', 'btn-primary', 'check') : '') +
-      (['approved'].includes(status) ? a('Schedule job', 'quoteToJob', 'btn-primary', 'calendar') + a('Convert to invoice', 'quoteToInvoice', '', 'invoice') : '') +
-      a('Email', 'docEmail', '', 'mail') + a('Text', 'docText', '', 'sms') + a('Print / PDF', 'docPrint', '', 'print') + a('Edit', 'editDoc', '', 'edit');
+      (status === 'approved' ? a('Schedule job', 'quoteToJob', 'btn-primary', 'calendar') + a('Convert to invoice', 'quoteToInvoice', '', 'invoice') : '') +
+      (['approved', 'sent', 'draft'].includes(status) && depositAmt(d) && !depInv ? a(`Request ${money(depositAmt(d))} deposit`, 'quoteDeposit', '', 'invoice') : '') +
+      (status === 'sent' || status === 'expired' ? a('Follow up', 'docFollow', '', 'sms') : send) + a('Print / PDF', 'docPrint', '', 'print') + a('Edit', 'editDoc', '', 'edit');
   const pays = isInv ? (d.payments || []) : [];
-  return head(`${isInv ? 'Invoice' : 'Quote'} ${esc(d.number)} ${badge(status)}`, '', `<a href="#/${coll}">← All ${coll}</a> · ${esc(c.name || '')}`) + `
+  const canMarkSent = isInv ? !d.sent && status === 'draft' : d.status === 'draft';
+  return head(`${isInv ? 'Invoice' : 'Quote'} ${esc(d.number)} ${badge(status)}`, '', `<a href="#/${coll}">← All ${coll}</a> · <a href="#/customers/${c.id}">${esc(c.name || '')}</a>`) + `
     <div class="doc-actions">${actions}</div>
-    ${!c.email && !c.phone ? '<div class="alert warn no-print" style="margin-bottom:12px">' + icon('alert') + 'This customer has no email or phone saved — add one to send from here.</div>' : ''}
+    ${!c.email && !c.phone ? `<div class="alert warn no-print" style="margin:0 auto 12px;max-width:820px">${icon('alert')}<span>This customer has no email or phone saved. <a href="#/customers/${c.id}">Add one</a> to send from here.</span></div>` : ''}
+    ${depInv ? `<div class="alert info no-print" style="margin:0 auto 12px;max-width:820px">${icon('invoice')}<span>Deposit invoice <a href="#/invoices/${depInv.id}">${esc(depInv.number)}</a> · ${badge(invStatus(depInv))}</span></div>` : ''}
     ${docHTML(type, d)}
     ${isInv ? `<div class="card no-print" style="margin-top:16px;max-width:820px;margin-left:auto;margin-right:auto">
       <div class="card-head"><h2>Payments</h2>${status !== 'paid' && status !== 'void' ? a('Record payment', 'recordPayment', 'btn-sm', 'plus') : ''}</div>
       ${pays.length ? pays.map(p => `<div class="list-item"><div class="grow"><div class="title">${money(p.amount)}</div><div class="muted small">${fmtDate(p.date)} · ${esc(p.method || '')}${p.note ? ' · ' + esc(p.note) : ''}</div></div>
         <button class="btn btn-sm btn-danger" data-act="deletePayment" data-id="${id}" data-pid="${p.id}">Remove</button></div>`).join('') : '<p class="muted small">No payments recorded yet.</p>'}
-      ${d.sentAt ? `<p class="muted small">Sent ${fmtDate(d.sentAt)}.</p>` : ''}
+      ${d.sentAt ? `<p class="muted small">Sent ${fmtDate(d.sentAt)}${d.remindedAt ? ` · last reminder ${fmtDate(d.remindedAt)}` : ''}.</p>` : ''}
     </div>` : `${d.sentAt ? `<p class="muted small no-print" style="text-align:center">Sent ${fmtDate(d.sentAt)}.</p>` : ''}`}
     <div class="row no-print" style="margin-top:16px;justify-content:center">
-      ${d.sent || d.status === 'sent' ? '' : a('Mark as sent', 'markSent', 'btn-sm')}
+      ${canMarkSent ? a('Mark as sent', 'markSent', 'btn-sm') : ''}
+      ${isInv && ['overdue', 'partial'].includes(status) ? send.replace(/class="btn /g, 'class="btn btn-sm ') : ''}
       ${a('Duplicate', 'dupDoc', 'btn-sm')}
       ${!isInv && ['draft', 'sent', 'expired'].includes(status) ? a('Mark declined', 'quoteDecline', 'btn-sm') : ''}
       ${isInv && status !== 'void' && !pays.length ? a('Void', 'voidInvoice', 'btn-sm') : ''}
-      ${isInv && d.jobId && byId('jobs', d.jobId) ? `<a class="btn btn-sm" href="#/jobs/${d.jobId}">View job</a>` : ''}
-      ${!isInv && d.jobId && byId('jobs', d.jobId) ? `<a class="btn btn-sm" href="#/jobs/${d.jobId}">View job</a>` : ''}
+      ${d.jobId && byId('jobs', d.jobId) ? `<a class="btn btn-sm" href="#/jobs/${d.jobId}">View job</a>` : ''}
       ${!isInv && d.invoiceId && byId('invoices', d.invoiceId) ? `<a class="btn btn-sm" href="#/invoices/${d.invoiceId}">View invoice</a>` : ''}
+      ${isInv && d.quoteId && byId('quotes', d.quoteId) ? `<a class="btn btn-sm" href="#/quotes/${d.quoteId}">View quote</a>` : ''}
       ${a('Delete', 'deleteDoc', 'btn-sm btn-danger')}
     </div>`;
 }
@@ -885,6 +1204,11 @@ VIEWS.reports = () => {
   // top customers
   const byCust = {}; incList.forEach(x => { if (x.customerId) byCust[x.customerId] = (byCust[x.customerId] || 0) + x.amount; });
   const custRows = Object.entries(byCust).map(([id, value]) => ({ label: custName(id), value })).sort((a, b) => b.value - a.value).slice(0, 8);
+  // income by lead source, revenue by team member
+  const bySource = {}; incList.forEach(x => { const src = (x.customerId && cust(x.customerId)?.source) || 'Unknown'; bySource[src] = (bySource[src] || 0) + x.amount; });
+  const sourceRows = Object.entries(bySource).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+  const byTeam = {}; db.jobs.filter(j => j.status === 'completed' && inRange(j.date, from, to)).forEach(j => { const k = j.assignedTo || 'Unassigned'; byTeam[k] = (byTeam[k] || 0) + jobValue(j); });
+  const teamRows = Object.entries(byTeam).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
   // aging
   const buckets = [['Not yet due', 0], ['1–30 days', 0], ['31–60 days', 0], ['61–90 days', 0], ['90+ days', 0]];
   db.invoices.filter(isOpenInv).forEach(i => {
@@ -938,6 +1262,10 @@ VIEWS.reports = () => {
       <tr><td>Quotes won</td><td class="num">${won.length} · ${money(sum(won, q => totals(q).total))}</td></tr>
       <tr><td><b>Win rate</b></td><td class="num"><b>${qs.length ? Math.round(won.length / qs.length * 100) + '%' : '—'}</b></td></tr></tbody></table></div>
   </div>
+  <div class="grid grid-2" style="margin-top:16px">
+    <div class="card"><h2 style="margin-bottom:4px">Income by lead source</h2><p class="muted small" style="margin:0 0 8px">Where your paying customers come from. Set the source on each customer.</p>${hbars(sourceRows, inc)}</div>
+    <div class="card"><h2 style="margin-bottom:4px">Completed work by team member</h2><p class="muted small" style="margin:0 0 8px">Value of jobs completed in this period.</p>${hbars(teamRows)}</div>
+  </div>
   <div class="card no-print" style="margin-top:16px"><h2 style="margin-bottom:10px">Export for your accountant</h2>
     <div class="row">${btn('Invoices CSV', 'exportInvoices', 'btn-sm', '', 'download')}${btn('Payments CSV', 'exportIncome', 'btn-sm', '', 'download')}
     ${btn('Expenses CSV', 'exportExpenses', 'btn-sm', '', 'download')}${btn('Mileage CSV', 'exportMileage', 'btn-sm', '', 'download')}</div>
@@ -973,15 +1301,23 @@ VIEWS.settings = () => {
     ${field('Payment terms (days until due)', inp('dueDays', s.dueDays, 'type="number" min="0"'))}
     ${field('Mileage rate (per unit)', inp('mileageRate', s.mileageRate, 'type="number" step="0.01" min="0"'))}
     ${field('Distance unit', `<select name="distanceUnit">${opts(['km', 'mi'], s.distanceUnit)}</select>`)}
+    ${field('Monthly income goal (optional)', inp('monthlyGoal', s.monthlyGoal || '', 'type="number" min="0" step="100" placeholder="e.g. 10000"'))}
   </div></div>
   <div class="card"><h2 style="margin-bottom:12px">Quotes &amp; invoices</h2><div class="form-grid">
     ${field('Invoice number prefix', inp('invoicePrefix', s.invoicePrefix))}${field('Next invoice number', inp('nextInvoiceNo', s.nextInvoiceNo, 'type="number"'))}
     ${field('Quote number prefix', inp('quotePrefix', s.quotePrefix))}${field('Next quote number', inp('nextQuoteNo', s.nextQuoteNo, 'type="number"'))}
     ${field('Quotes valid for (days)', inp('quoteValidDays', s.quoteValidDays, 'type="number" min="0"'))}<div></div>
-    ${field('How customers can pay you (printed on invoices)', `<textarea name="paymentInstructions">${esc(s.paymentInstructions)}</textarea>`, 'full')}
+    ${field('How customers can pay you (printed on invoices)', `<textarea name="paymentInstructions" placeholder="e.g. e-Transfer to you@email.com">${esc(s.paymentInstructions)}</textarea>`, 'full')}
+    ${field('Online payment link (optional)', inp('paymentLink', s.paymentLink, 'type="url" placeholder="Stripe, Square or PayPal payment link"'), 'full')}
+    ${field('Review link (optional)', inp('reviewLink', s.reviewLink, 'type="url" placeholder="Your Google review link"'), 'full')}
     ${field('Default invoice note', `<textarea name="invoiceNotes">${esc(s.invoiceNotes)}</textarea>`, 'full')}
     ${field('Default quote note / terms', `<textarea name="quoteNotes">${esc(s.quoteNotes)}</textarea>`, 'full')}
   </div></div>
+  <div class="card"><h2 style="margin-bottom:4px">Message templates</h2>
+    <p class="muted small">Used when you text or email customers. Placeholders: <code>{first}</code> <code>{customer}</code> <code>{business}</code> <code>{number}</code> <code>{total}</code>
+    <code>{balance}</code> <code>{due}</code> <code>{valid}</code> <code>{items}</code> <code>{date}</code> <code>{time}</code> <code>{pay}</code> <code>{review}</code> <code>{signature}</code></p>
+    <div class="stack" style="gap:12px">${TEMPLATES.map(([k, l]) => field(l, `<textarea name="${k}" rows="3">${esc(s[k])}</textarea>`)).join('')}</div>
+    <div style="margin-top:10px">${btn('Reset templates to default', 'resetTemplates', 'btn-sm')}</div></div>
   <div class="card"><h2 style="margin-bottom:12px">Expense categories</h2>
     ${field('One per line', `<textarea name="categories" rows="8">${esc(db.categories.join('\n'))}</textarea>`)}</div>
   <div class="card"><h2 style="margin-bottom:12px">Appearance</h2>
@@ -989,7 +1325,8 @@ VIEWS.settings = () => {
   <div class="row"><button class="btn btn-primary" type="submit">Save settings</button></div>
   </form>
   <div class="card" style="margin-top:16px"><h2 style="margin-bottom:8px">Your data</h2>
-    <p class="muted small">Everything is saved privately in this browser on this device (${used} MB used). <b>Download a backup regularly</b>, and use Restore to move your data to another phone or computer.</p>
+    <p class="muted small">Everything is saved privately in this browser on this device (${used} MB used). <b>Download a backup regularly</b>, and use Restore to move your data to another phone or computer.
+    ${s.lastBackup ? `Last backup: ${fmtDate(s.lastBackup)}.` : '<b style="color:var(--warn)">You haven’t made a backup yet.</b>'}</p>
     <div class="row">${btn('Download backup', 'exportBackup', 'btn-primary', '', 'download')}${btn('Restore from backup', 'importBackup')}
     ${btn('Load sample data', 'loadSample')}${btn('Erase everything', 'eraseAll', 'btn-danger')}</div></div>`;
 };
@@ -1004,16 +1341,22 @@ function customerForm(c, onSaved) {
     ${field('Mobile phone', inp('phone', c.phone, 'type="tel"'))}${field('Email', inp('email', c.email, 'type="email"'))}
     ${field('Address', inp('address', c.address, 'placeholder="Street, city, postal code"'), 'full')}
     ${field('Tags', inp('tags', c.tags, 'placeholder="e.g. residential, referral"'))}
-    ${field('Lead source', `<select name="source">${opts(['', 'Referral', 'Google', 'Facebook / Instagram', 'Website', 'Door hanger / flyer', 'Repeat customer', 'Other'], c.source || '')}</select>`)}
+    ${field('How they found you', `<select name="source">${opts(LEAD_SOURCES.map(x => [x, x || '—']), c.source || '')}</select>`)}
     ${field('Notes', `<textarea name="notes" placeholder="Gate code, pets, preferences…">${esc(c.notes)}</textarea>`, 'full')}</div>`,
     onSubmit: (f, d) => {
-      Object.assign(c, d, { name: d.name.trim() });
+      if (isNew) {
+        const digits = x => String(x || '').replace(/\D/g, '').slice(-10);
+        const dup = db.customers.find(x => (d.phone && digits(x.phone) && digits(x.phone) === digits(d.phone)) || (d.email && x.email && x.email.toLowerCase() === d.email.trim().toLowerCase()));
+        if (dup && !confirm(`${dup.name} already has this phone number or email. Add a new customer anyway?`)) return false;
+      }
+      Object.assign(c, d, { name: d.name.trim(), email: d.email.trim(), phone: d.phone.trim() });
       if (isNew) { c.id = uid(); c.createdAt = today(); db.customers.push(c); }
       save(); toast(isNew ? 'Customer added' : 'Customer saved');
       if (onSaved) onSaved(c); else render();
     } });
 }
 
+const laterInSeries = j => db.jobs.filter(x => x.seriesId && x.seriesId === j.seriesId && x.id !== j.id && x.status === 'scheduled' && (x.date || '') > (j.date || ''));
 function jobForm(j, preset = {}) {
   const isNew = !j; j ||= { status: 'scheduled', date: preset.date || today(), ...preset };
   const c = cust(j.customerId);
@@ -1027,8 +1370,9 @@ function jobForm(j, preset = {}) {
     ${field('Status', `<select name="status">${opts([['scheduled', 'Scheduled'], ['in_progress', 'In progress'], ['completed', 'Completed'], ['cancelled', 'Cancelled']], j.status)}</select>`)}
     ${isNew ? field('Repeat', `<select name="repeat">${opts([['', 'Does not repeat'], ['7', 'Every week'], ['14', 'Every 2 weeks'], ['m1', 'Every month'], ['m3', 'Every 3 months'], ['m12', 'Every year']], '')}</select>`) +
       field('Number of visits', inp('occurrences', 6, 'type="number" min="1" max="104"')) : ''}
-    ${field('Notes / instructions', `<textarea name="notes">${esc(j.notes)}</textarea>`, 'full')}
-  </div><h3 style="margin:16px 0 8px">Line items <span class="muted small">(optional — used when you invoice)</span></h3>${itemsEditorHTML(j)}`,
+    ${field('Notes / instructions', `<textarea name="notes" placeholder="Gate code, scope of work, materials to bring…">${esc(j.notes)}</textarea>`, 'full')}
+    ${!isNew && j.seriesId && laterInSeries(j).length ? `<label class="check full"><input type="checkbox" name="applySeries"> Also apply changes to the ${laterInSeries(j).length} later visit(s) in this repeating series (not dates)</label>` : ''}
+  </div><h3 style="margin:16px 0 8px">Line items <span class="muted small">(optional, used when you invoice)</span></h3>${itemsEditorHTML(j)}`,
     onMount: f => {
       j._getItems = mountItemsEditor(f, j);
       bindCustomerSelect(f, nc => { if (nc && !f.address.value) f.address.value = nc.address || ''; });
@@ -1037,7 +1381,13 @@ function jobForm(j, preset = {}) {
       const items = j._getItems(); delete j._getItems;
       const base = { customerId: d.customerId, title: d.title.trim(), date: d.date, start: d.start, end: d.end, address: d.address,
         assignedTo: d.assignedTo, status: d.status, notes: d.notes, items, discount: +d.discount || 0, taxRate: d.taxRate === '' ? db.settings.taxRate : +d.taxRate };
-      if (!isNew) { Object.assign(j, base); save(); toast('Job saved'); render(); return; }
+      if (!isNew) {
+        const later = d.applySeries ? laterInSeries(j) : [];
+        Object.assign(j, base);
+        const { date: _d, status: _s, ...shared } = base;
+        later.forEach(x => Object.assign(x, { ...shared, items: structuredClone(items) }));
+        save(); toast(later.length ? `Job and ${later.length} later visit(s) updated` : 'Job saved'); render(); return;
+      }
       const n = d.repeat ? Math.min(Math.max(+d.occurrences || 1, 1), 104) : 1;
       const series = n > 1 ? uid() : undefined;
       let date = d.date, firstId;
@@ -1048,7 +1398,8 @@ function jobForm(j, preset = {}) {
         if (d.repeat && date) date = d.repeat.startsWith('m') ? addMonths(date, +d.repeat.slice(1)) : addDays(date, +d.repeat);
       }
       if (j.quoteId) { const q = byId('quotes', j.quoteId); if (q) { q.status = 'converted'; q.jobId = firstId; } }
-      save(); toast(n > 1 ? `${n} visits scheduled` : 'Job scheduled');
+      if (j.leadId) { const l = byId('leads', j.leadId); if (l) { l.stage = 'won'; l.closedAt = today(); } }
+      save(); toast(n > 1 ? `${n} visits scheduled` : d.date ? 'Job scheduled' : 'Job saved (no date yet)');
       go('#/jobs/' + firstId);
     } });
 }
@@ -1056,7 +1407,7 @@ function jobForm(j, preset = {}) {
 function docForm(type, d, preset = {}) {
   const isInv = type === 'invoice', isNew = !d, s = db.settings;
   d ||= { customerId: preset.customerId, date: today(), items: preset.items || [], notes: isInv ? s.invoiceNotes : s.quoteNotes,
-    taxRate: s.taxRate, discount: preset.discount || 0, jobId: preset.jobId, quoteId: preset.quoteId };
+    taxRate: s.taxRate, discount: preset.discount || 0, jobId: preset.jobId, quoteId: preset.quoteId, leadId: preset.leadId, serviceAddress: preset.serviceAddress };
   if (isNew) { if (isInv) d.dueDate = addDays(d.date, +s.dueDays || 0); else d.validUntil = addDays(d.date, +s.quoteValidDays || 30); }
   const dateField = isInv ? field('Due date', inp('dueDate', d.dueDate, 'type="date"')) : field('Valid until', inp('validUntil', d.validUntil, 'type="date"'));
   modal({ title: `${isNew ? 'New' : 'Edit'} ${type}`, wide: true, submitLabel: isNew ? `Create ${type}` : 'Save', body: `<div class="form-grid">
@@ -1064,6 +1415,7 @@ function docForm(type, d, preset = {}) {
     ${field(isInv ? 'Invoice date' : 'Quote date', inp('date', d.date, 'type="date" required'))}${dateField}
     ${field('Service address (if different)', inp('serviceAddress', d.serviceAddress), 'full')}
   </div><h3 style="margin:16px 0 8px">Line items</h3>${itemsEditorHTML(d)}
+  ${!isInv ? field('Deposit required (% of total, optional)', inp('depositPct', d.depositPct || '', 'type="number" min="0" max="100" step="1" placeholder="e.g. 25"')) : ''}
   ${field('Notes shown to customer', `<textarea name="notes">${esc(d.notes)}</textarea>`, 'full')}`,
     onMount: f => { d._getItems = mountItemsEditor(f, d); bindCustomerSelect(f); },
     onSubmit: (f, v) => {
@@ -1072,12 +1424,13 @@ function docForm(type, d, preset = {}) {
       delete d._getItems;
       Object.assign(d, { customerId: v.customerId, date: v.date, notes: v.notes, serviceAddress: v.serviceAddress, items,
         discount: +v.discount || 0, taxRate: v.taxRate === '' ? s.taxRate : +v.taxRate });
-      if (isInv) d.dueDate = v.dueDate; else d.validUntil = v.validUntil;
+      if (isInv) d.dueDate = v.dueDate; else { d.validUntil = v.validUntil; d.depositPct = Math.min(100, Math.max(0, +v.depositPct || 0)); }
       if (isNew) {
         Object.assign(d, { id: uid(), number: nextNumber(type), createdAt: today() });
         if (isInv) { d.payments = []; db.invoices.push(d); } else { d.status = 'draft'; db.quotes.push(d); }
         if (d.jobId) { const j = byId('jobs', d.jobId); if (j) j.invoiceId = d.id; }
         if (d.quoteId) { const q = byId('quotes', d.quoteId); if (q) { q.status = 'converted'; q.invoiceId = d.id; } }
+        if (d.leadId) { const l = byId('leads', d.leadId); if (l) { l.stage = 'quoted'; l.quoteId = d.id; } }
       }
       save(); toast(isNew ? `${isInv ? 'Invoice' : 'Quote'} ${d.number} created` : 'Saved');
       go(`#/${isInv ? 'invoices' : 'quotes'}/${d.id}`);
@@ -1087,7 +1440,7 @@ function docForm(type, d, preset = {}) {
 function expenseForm(e, preset = {}) {
   const isNew = !e; e ||= { date: today(), category: db.categories[0], method: 'Debit', ...preset };
   let receipt = e.receipt || '';
-  const jobs = db.jobs.filter(j => j.status !== 'cancelled').sort((a, b) => b.date.localeCompare(a.date)).slice(0, 200);
+  const jobs = db.jobs.filter(j => j.status !== 'cancelled').sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 200);
   modal({ title: isNew ? 'Add expense' : 'Edit expense', body: `<div class="form-grid">
     ${field('Amount (total paid) *', inp('amount', e.amount, 'type="number" step="0.01" min="0" required inputmode="decimal"'))}
     ${field('Date *', inp('date', e.date, 'type="date" required'))}
@@ -1097,6 +1450,7 @@ function expenseForm(e, preset = {}) {
     ${field('Paid with', `<select name="method">${opts(['Debit', 'Credit card', 'Cash', 'e-Transfer', 'Cheque', 'Bank transfer', 'Other'], e.method)}</select>`)}
     ${field('Link to job (for job costing)', `<select name="jobId"><option value="">— None —</option>${jobs.map(j => `<option value="${j.id}" ${j.id === e.jobId ? 'selected' : ''}>${esc(fmtDate(j.date) + ' · ' + j.title + ' · ' + custName(j.customerId))}</option>`).join('')}</select>`, 'full')}
     ${field('Notes', `<textarea name="notes" rows="2">${esc(e.notes)}</textarea>`, 'full')}
+    ${e.recurFrom ? '' : `<label class="check full"><input type="checkbox" name="recurring" ${e.recurring ? 'checked' : ''}> Repeats every month (adds it automatically, e.g. insurance, phone, software)</label>`}
     <div class="field full"><label>Receipt photo</label><input type="file" accept="image/*" capture="environment" class="js-receipt">
       <div class="js-receipt-prev" style="margin-top:6px">${receipt ? `<img src="${receipt}" style="max-height:160px;border-radius:8px"><br><button type="button" class="btn btn-sm js-rm-receipt">Remove photo</button>` : ''}</div></div>
   </div>`, footExtra: isNew ? '' : `<button type="button" class="btn btn-danger js-del">Delete</button>`,
@@ -1112,8 +1466,11 @@ function expenseForm(e, preset = {}) {
       $('.js-del', f)?.addEventListener('click', () => { if (confirm('Delete this expense?')) { db.expenses = db.expenses.filter(x => x.id !== e.id); close(); refresh(); toast('Expense deleted'); } });
     },
     onSubmit: (f, d) => {
+      const wasRecurring = e.recurring;
       Object.assign(e, { amount: round2(d.amount), date: d.date, vendor: d.vendor.trim(), category: d.category, tax: d.tax === '' ? 0 : round2(d.tax),
-        method: d.method, jobId: d.jobId, notes: d.notes, receipt });
+        method: d.method, jobId: d.jobId, notes: d.notes, receipt, recurring: !!d.recurring });
+      if (e.recurring && !wasRecurring) e.recurNext = addMonths(e.date, 1);
+      if (!e.recurring) e.recurNext = '';
       if (isNew) { e.id = uid(); db.expenses.push(e); }
       refresh(); toast(isNew ? 'Expense added' : 'Expense saved');
     } });
@@ -1167,6 +1524,139 @@ function serviceForm(s) {
     } });
 }
 
+function leadForm(l) {
+  const isNew = !l; l ||= { stage: 'new', followUp: addDays(today(), 1) };
+  const linked = l.customerId && cust(l.customerId);
+  const q = l.quoteId && byId('quotes', l.quoteId);
+  modal({ title: isNew ? 'New lead' : 'Lead', body: `
+    ${!isNew ? `<div class="row" style="margin-bottom:14px">
+      <button type="button" class="btn btn-sm btn-primary js-lead-quote">${icon('quote')}${q ? 'View quote' : 'Create quote'}</button>
+      <button type="button" class="btn btn-sm js-lead-job">${icon('calendar')}Book job</button>
+      ${l.phone ? `<a class="btn btn-sm" href="tel:${esc(l.phone)}">${icon('phone')}Call</a><a class="btn btn-sm" href="${smsHref(l.phone, '')}">${icon('sms')}Text</a>` : ''}
+      ${l.email ? `<a class="btn btn-sm" href="mailto:${esc(l.email)}">${icon('mail')}Email</a>` : ''}
+      ${linked ? `<a class="btn btn-sm" href="#/customers/${linked.id}">${icon('users')}Customer</a>` : ''}</div>` : ''}
+    <div class="form-grid">
+    ${field('Name *', inp('name', l.name, 'required placeholder="Who is asking?"'), 'full')}
+    ${field('Phone', inp('phone', l.phone, 'type="tel"'))}${field('Email', inp('email', l.email, 'type="email"'))}
+    ${field('Address', inp('address', l.address), 'full')}
+    ${field('What do they need?', inp('service', l.service, 'list="svcList2" placeholder="e.g. Gutter cleaning"') + `<datalist id="svcList2">${db.services.map(x => `<option value="${esc(x.name)}">`).join('')}</datalist>`)}
+    ${field('Estimated value', inp('value', l.value || '', 'type="number" min="0" step="1" inputmode="decimal"'))}
+    ${field('Stage', `<select name="stage">${opts(LEAD_STAGES, l.stage)}</select>`)}
+    ${field('Follow up on', inp('followUp', l.followUp, 'type="date"'))}
+    ${field('How they found you', `<select name="source">${opts(LEAD_SOURCES.map(x => [x, x || '—']), l.source || '')}</select>`)}
+    ${field('Notes', `<textarea name="notes" rows="2">${esc(l.notes)}</textarea>`, 'full')}</div>`,
+    footExtra: isNew ? '' : `<button type="button" class="btn btn-danger js-del">Delete</button>`,
+    onMount: (f, close) => {
+      const apply = () => { if (!f.reportValidity()) return false; saveLead(Object.fromEntries(new FormData(f))); return true; };
+      $('.js-del', f)?.addEventListener('click', () => { if (confirm('Delete this lead?')) { db.leads = db.leads.filter(x => x.id !== l.id); close(); refresh(); } });
+      $('.js-lead-quote', f)?.addEventListener('click', () => {
+        if (!apply()) return; close();
+        if (q) return go('#/quotes/' + q.id);
+        const c = leadToCustomer(l); save();
+        docForm('quote', null, { customerId: c.id, leadId: l.id, serviceAddress: l.address,
+          items: l.service ? [{ desc: l.service, qty: 1, price: +l.value || '', taxable: true }] : [] });
+      });
+      $('.js-lead-job', f)?.addEventListener('click', () => {
+        if (!apply()) return; close();
+        const c = leadToCustomer(l); save();
+        jobForm(null, { customerId: c.id, title: l.service || '', address: l.address, leadId: l.id, quoteId: q?.id,
+          items: q ? structuredClone(q.items) : [] });
+      });
+    },
+    onSubmit: (f, d) => { saveLead(d); refresh(); toast(isNew ? 'Lead added' : 'Lead saved'); } });
+  function saveLead(d) {
+    const was = l.stage;
+    Object.assign(l, { name: d.name.trim(), phone: d.phone.trim(), email: d.email.trim(), address: d.address, service: d.service, value: +d.value || 0,
+      stage: d.stage, followUp: d.followUp, source: d.source, notes: d.notes });
+    if (l.stage !== was && ['won', 'lost'].includes(l.stage)) l.closedAt = today();
+    if (isNew && !l.id) { l.id = uid(); l.createdAt = today(); db.leads.push(l); }
+  }
+}
+function leadToCustomer(l) {
+  let c = l.customerId && cust(l.customerId);
+  const digits = x => String(x || '').replace(/\D/g, '').slice(-10);
+  c ||= db.customers.find(x => (l.phone && digits(x.phone) === digits(l.phone)) || (l.email && (x.email || '').toLowerCase() === l.email.toLowerCase()));
+  if (!c) {
+    c = { id: uid(), createdAt: today(), name: l.name, phone: l.phone || '', email: l.email || '', address: l.address || '', source: l.source || '', notes: l.notes || '' };
+    db.customers.push(c); toast(`${c.name} added to customers`);
+  }
+  l.customerId = c.id;
+  if (l.stage === 'new') l.stage = 'contacted';
+  return c;
+}
+
+function taskForm(x, preset = {}) {
+  const isNew = !x; x ||= { due: today(), ...preset };
+  modal({ title: isNew ? 'New to-do' : 'Edit to-do', body: `<div class="form-grid">
+    ${field('What needs doing? *', inp('title', x.title, 'required placeholder="e.g. Call back about the fence quote"'), 'full')}
+    ${field('Due date', inp('due', x.due, 'type="date"'))}${field('Time (optional)', inp('time', x.time, 'type="time"'))}
+    ${field('Customer (optional)', `<select name="customerId"><option value="">— None —</option>${opts([...db.customers].sort((a, b) => a.name.localeCompare(b.name)).map(c => [c.id, c.name]), x.customerId)}</select>`, 'full')}
+    ${field('Notes', `<textarea name="notes" rows="2">${esc(x.notes)}</textarea>`, 'full')}</div>`,
+    footExtra: isNew ? '' : `<button type="button" class="btn btn-danger js-del">Delete</button>`,
+    onMount: (f, close) => $('.js-del', f)?.addEventListener('click', () => { db.tasks = db.tasks.filter(t => t.id !== x.id); close(); refresh(); toast('To-do deleted'); }),
+    onSubmit: (f, d) => {
+      Object.assign(x, { title: d.title.trim(), due: d.due, time: d.time, customerId: d.customerId, notes: d.notes });
+      if (isNew) { x.id = uid(); x.createdAt = today(); x.done = false; db.tasks.push(x); }
+      refresh(); toast('To-do saved');
+    } });
+}
+
+function photoViewer(j, pid) {
+  const ph = (j.photos || []).find(p => p.id === pid); if (!ph) return;
+  modal({ title: `Photo · ${fmtDate(ph.date)}`, wide: true, noFoot: true, body: `<img src="${ph.src}" alt="" style="width:100%;border-radius:8px">
+    <div class="row" style="margin-top:12px"><a class="btn btn-sm" href="${ph.src}" download="job-photo-${ph.date}.jpg">${icon('download')}Save</a>
+    <button type="button" class="btn btn-sm btn-danger js-del">${icon('trash')}Delete photo</button></div>`,
+    onMount: (f, close) => $('.js-del', f).addEventListener('click', () => { if (confirm('Delete this photo?')) { j.photos = j.photos.filter(p => p.id !== pid); close(); refresh(); } }) });
+}
+
+function openSearch() {
+  if ($('#modalRoot .search-modal')) return;
+  const { form } = modal({ title: 'Search', noFoot: true, body: `<input type="search" class="js-q" placeholder="Customers, jobs, invoices, quotes, leads…" data-nodirty autofocus>
+    <div class="js-results search-results"></div>` });
+  form.closest('.modal-backdrop').classList.add('search-modal');
+  const input = $('.js-q', form), out = $('.js-results', form);
+  const run = () => {
+    const q = input.value.trim().toLowerCase();
+    if (q.length < 2) { out.innerHTML = '<p class="muted small">Type at least 2 letters.</p>'; return; }
+    const has = (...xs) => xs.join(' ').toLowerCase().includes(q);
+    const groups = [
+      ['Customers', db.customers.filter(c => has(c.name, c.phone, c.email, c.address)).map(c => [`#/customers/${c.id}`, c.name, [c.phone, c.address].filter(Boolean).join(' · ')])],
+      ['Leads', db.leads.filter(l => has(l.name, l.phone, l.service)).map(l => [`lead:${l.id}`, l.name, `${l.service || ''} · ${l.stage}`])],
+      ['Jobs', db.jobs.filter(j => has(j.title, custName(j.customerId), j.address)).sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(j => [`#/jobs/${j.id}`, j.title, `${custName(j.customerId)} · ${j.date ? fmtDate(j.date) : 'no date'}`])],
+      ['Quotes', db.quotes.filter(x => has(x.number, custName(x.customerId))).map(x => [`#/quotes/${x.id}`, `${x.number} · ${custName(x.customerId)}`, `${money(totals(x).total)} · ${quoteStatus(x)}`])],
+      ['Invoices', db.invoices.filter(x => has(x.number, custName(x.customerId))).map(x => [`#/invoices/${x.id}`, `${x.number} · ${custName(x.customerId)}`, `${money(totals(x).total)} · ${invStatus(x)}`])],
+    ].filter(g => g[1].length);
+    out.innerHTML = groups.length ? groups.map(([l, items]) => `<h3 class="group-label">${l}</h3>${items.slice(0, 6).map(([href, t, sub]) =>
+      href.startsWith('lead:') ? `<button type="button" class="list-item search-hit" data-lead="${href.slice(5)}"><div class="grow"><div class="title">${esc(t)}</div><div class="muted small">${esc(sub)}</div></div></button>`
+        : `<a class="list-item search-hit" href="${href}"><div class="grow"><div class="title">${esc(t)}</div><div class="muted small">${esc(sub)}</div></div></a>`).join('')}`).join('')
+      : '<p class="muted small">No matches.</p>';
+  };
+  input.addEventListener('input', run);
+  out.addEventListener('click', e => { const b = e.target.closest('[data-lead]'); if (b) { form.closest('.modal-backdrop').remove(); leadForm(byId('leads', b.dataset.lead)); } });
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('.search-hit', out)?.click(); } });
+  run();
+}
+
+/** Creates any due copies of recurring expenses (e.g. monthly insurance). */
+function processRecurring() {
+  let n = 0; const t = today();
+  for (const e of [...db.expenses]) {
+    if (!e.recurring || !e.recurNext) continue;
+    let guard = 0;
+    while (e.recurNext <= t && guard++ < 60) {
+      db.expenses.push({ ...e, id: uid(), date: e.recurNext, receipt: '', recurring: false, recurNext: '', recurFrom: e.id });
+      e.recurNext = addMonths(e.recurNext, 1); n++;
+    }
+  }
+  if (n) { save(); setTimeout(() => toast(`Added ${n} recurring expense${n > 1 ? 's' : ''}`), 600); }
+}
+
+function depositCredit(quoteId) {
+  const q = quoteId && byId('quotes', quoteId), dep = q?.depositInvoiceId && byId('invoices', q.depositInvoiceId);
+  if (!dep || dep.void) return null;
+  return { desc: `Less deposit (invoice ${dep.number})`, details: '', qty: 1, price: -totals(dep).total, taxable: false };
+}
+
 function paymentForm(inv) {
   const bal = balance(inv);
   modal({ title: `Record payment — ${inv.number}`, submitLabel: 'Record payment', body: `<div class="form-grid">
@@ -1201,9 +1691,14 @@ const ACTIONS = {
   newCustomer: () => customerForm(),
   editCustomer: ds => customerForm(cust(ds.id)),
   deleteCustomer: ds => {
-    const n = db.jobs.filter(j => j.customerId === ds.id).length + db.invoices.filter(i => i.customerId === ds.id).length;
-    if (n) return alert('This customer has jobs or invoices. Delete those first, so your records stay complete.');
-    if (confirm('Delete this customer?')) { db.customers = db.customers.filter(c => c.id !== ds.id); save(); go('#/customers'); }
+    const n = db.jobs.filter(j => j.customerId === ds.id).length + db.invoices.filter(i => i.customerId === ds.id).length + db.quotes.filter(q => q.customerId === ds.id).length;
+    if (n) return alert('This customer has jobs, quotes or invoices. Delete those first, so your records stay complete.');
+    if (!confirm('Delete this customer?')) return;
+    db.customers = db.customers.filter(c => c.id !== ds.id);
+    db.leads.forEach(l => { if (l.customerId === ds.id) l.customerId = ''; });
+    db.tasks.forEach(t => { if (t.customerId === ds.id) t.customerId = ''; });
+    db.incomes.forEach(t => { if (t.customerId === ds.id) t.customerId = ''; });
+    save(); go('#/customers');
   },
   importCustomers: () => modal({ title: 'Import customers from CSV', submitLabel: 'Import', body: `<p class="muted small">Upload a CSV with a header row. Columns named <b>name</b>, <b>email</b>, <b>phone</b>, <b>address</b> and <b>notes</b> are recognised (e.g. an export from Homebase, Jobber, or your phone contacts).</p><input type="file" accept=".csv,text/csv" name="file" required>`,
     onSubmit: f => {
@@ -1223,7 +1718,10 @@ const ACTIONS = {
     } }),
   newJob: ds => jobForm(null, { date: ds.date || today(), customerId: ds.cust }),
   editJob: ds => jobForm(byId('jobs', ds.id)),
-  dupJob: ds => { const j = byId('jobs', ds.id); jobForm(null, { ...structuredClone(j), id: undefined, invoiceId: undefined, quoteId: undefined, seriesId: undefined, status: 'scheduled', date: today() }); },
+  dupJob: ds => {
+    const { customerId, title, start, end, address, assignedTo, notes, items, discount, taxRate } = structuredClone(byId('jobs', ds.id));
+    jobForm(null, { customerId, title, start, end, address, assignedTo, notes, items, discount, taxRate, date: today() });
+  },
   jobStatus: ds => {
     const j = byId('jobs', ds.id); j.status = ds.s; if (ds.s === 'completed') j.completedAt = today(); refresh();
     if (ds.s === 'completed' && !j.invoiceId) toast('Job complete — create the invoice while it’s fresh!'); else toast('Status updated');
@@ -1242,11 +1740,42 @@ const ACTIONS = {
   jobToInvoice: ds => {
     const j = byId('jobs', ds.id);
     if (!(j.items || []).length) return docForm('invoice', null, { customerId: j.customerId, jobId: j.id });
-    const inv = invoiceFromItems(j, { jobId: j.id }); j.invoiceId = inv.id;
+    const credit = depositCredit(j.quoteId);
+    const inv = invoiceFromItems(j, { jobId: j.id, quoteId: j.quoteId }); j.invoiceId = inv.id;
+    if (credit) inv.items.push(credit);
     save(); toast(`Invoice ${inv.number} created`); go('#/invoices/' + inv.id);
   },
-  calMove: ds => { state.calMonth = addMonths(state.calMonth + '-01', +ds.n).slice(0, 7); render(); },
+  calMove: ds => {
+    const n = +ds.n;
+    if (state.calView === 'month') {
+      state.calMonth = addMonths(state.calMonth + '-01', n).slice(0, 7);
+      state.calDay = today().startsWith(state.calMonth) ? today() : state.calMonth + '-01';
+    } else {
+      state.calDay = addDays(state.calDay, state.calView === 'week' ? n * 7 : n);
+      state.calMonth = state.calDay.slice(0, 7);
+    }
+    render();
+  },
   calToday: () => { state.calMonth = today().slice(0, 7); state.calDay = today(); render(); },
+  calView: ds => { state.calView = ds.v; state.calMonth = state.calDay.slice(0, 7); render(); },
+  openMenu: () => {
+    $('#sidebar').classList.add('open');
+    const scrim = document.createElement('div'); scrim.className = 'scrim';
+    scrim.onclick = () => { $('#sidebar').classList.remove('open'); scrim.remove(); };
+    document.body.append(scrim);
+  },
+  openSearch: () => openSearch(),
+  hideSetup: () => { db.settings.hideSetup = true; refresh(); },
+  newLead: () => leadForm(), editLead: ds => leadForm(byId('leads', ds.id)),
+  toggleClosedLeads: () => { state.filters.leads ||= {}; state.filters.leads.closed = state.filters.leads.closed === '1' ? '' : '1'; render(); },
+  newTask: ds => taskForm(null, ds.cust ? { customerId: ds.cust } : {}), editTask: ds => taskForm(byId('tasks', ds.id)),
+  toggleTask: ds => {
+    const x = byId('tasks', ds.id); x.done = !x.done; x.doneAt = x.done ? today() : '';
+    refresh(); if (x.done) toast('Done ✓');
+  },
+  clearDoneTasks: () => { if (confirm('Remove all completed to-dos?')) { db.tasks = db.tasks.filter(x => !x.done); refresh(); } },
+  viewPhoto: ds => photoViewer(byId('jobs', ds.id), ds.pid),
+  resetTemplates: () => { if (confirm('Reset all message templates to the defaults?')) { TEMPLATES.forEach(([k]) => db.settings[k] = DEFAULT_SETTINGS[k]); refresh(); toast('Templates reset'); } },
   newQuote: ds => docForm('quote', null, { customerId: ds.cust }),
   newInvoice: ds => docForm('invoice', null, { customerId: ds.cust }),
   editDoc: ds => {
@@ -1254,26 +1783,50 @@ const ACTIONS = {
     if (ds.type === 'quote' && d.status === 'converted' && !confirm('This quote was already converted. Edit anyway?')) return;
     docForm(ds.type, d);
   },
-  dupDoc: ds => { const d = docOf(ds); docForm(ds.type, null, { customerId: d.customerId, items: structuredClone(d.items), discount: d.discount }); },
+  dupDoc: ds => { const d = docOf(ds); docForm(ds.type, null, { customerId: d.customerId, items: structuredClone(d.items).filter(it => !String(it.desc).startsWith('Less deposit')), discount: d.discount, serviceAddress: d.serviceAddress }); },
   deleteDoc: ds => {
     const d = docOf(ds);
     if (ds.type === 'invoice' && (d.payments || []).length && !confirm('This invoice has payments recorded. Deleting it also removes those payments from your income. Continue?')) return;
     if (!confirm(`Delete ${ds.type} ${d.number}? This cannot be undone.`)) return;
-    if (ds.type === 'invoice') { db.invoices = db.invoices.filter(x => x.id !== d.id); db.jobs.forEach(j => { if (j.invoiceId === d.id) j.invoiceId = ''; }); }
-    else db.quotes = db.quotes.filter(x => x.id !== d.id);
+    if (ds.type === 'invoice') {
+      db.invoices = db.invoices.filter(x => x.id !== d.id);
+      db.jobs.forEach(j => { if (j.invoiceId === d.id) j.invoiceId = ''; });
+      db.quotes.forEach(q => { if (q.invoiceId === d.id) q.invoiceId = ''; if (q.depositInvoiceId === d.id) q.depositInvoiceId = ''; });
+    } else {
+      db.quotes = db.quotes.filter(x => x.id !== d.id);
+      db.leads.forEach(l => { if (l.quoteId === d.id) l.quoteId = ''; });
+    }
     save(); go(`#/${ds.type === 'invoice' ? 'invoices' : 'quotes'}`);
   },
   markSent: ds => { markSent(ds.type, docOf(ds)); refresh(); toast('Marked as sent'); },
   docEmail: ds => {
     const d = docOf(ds), c = cust(d.customerId) || {};
     const subj = `${ds.type === 'invoice' ? 'Invoice' : 'Quote'} ${d.number} from ${db.settings.businessName || ''}`.trim();
-    location.href = `mailto:${encodeURIComponent(c.email || '')}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(docMessage(ds.type, d) + '\n\n(Tip: attach the PDF — use Print / PDF → Save as PDF.)')}`;
+    location.href = mailHref(c.email, subj, docMessage(ds.type, d));
     markSent(ds.type, d); save(); setTimeout(render, 400);
+    toast('Tip: attach the PDF. Use Print / PDF → Save as PDF.');
   },
   docText: ds => {
     const d = docOf(ds), c = cust(d.customerId) || {};
-    location.href = `sms:${encodeURIComponent(c.phone || '')}?&body=${encodeURIComponent(docMessage(ds.type, d))}`;
+    location.href = smsHref(c.phone, docMessage(ds.type, d));
     markSent(ds.type, d); save(); setTimeout(render, 400);
+  },
+  docRemind: ds => {
+    const d = docOf(ds), c = cust(d.customerId) || {}, msg = docMessage('invoice', d, 'reminder');
+    location.href = c.phone ? smsHref(c.phone, msg) : mailHref(c.email, `Reminder: invoice ${d.number}`, msg);
+    d.remindedAt = today(); save(); setTimeout(render, 400);
+  },
+  docFollow: ds => {
+    const d = docOf(ds), c = cust(d.customerId) || {}, msg = docMessage('quote', d, 'followup');
+    location.href = c.phone ? smsHref(c.phone, msg) : mailHref(c.email, `Following up on quote ${d.number}`, msg);
+    d.followedUpAt = today(); save();
+  },
+  quoteDeposit: ds => {
+    const q = docOf(ds), amt = depositAmt(q);
+    const inv = invoiceFromItems({ customerId: q.customerId, serviceAddress: q.serviceAddress, items: [{ desc: `Deposit (${+q.depositPct}%) for quote ${q.number}`, details: '', qty: 1, price: amt, taxable: false }] },
+      { quoteId: q.id, dueDate: today(), isDeposit: true });
+    q.depositInvoiceId = inv.id; if (q.status === 'draft') { q.status = 'sent'; q.sentAt = today(); }
+    save(); toast(`Deposit invoice ${inv.number} created`); go('#/invoices/' + inv.id);
   },
   docPrint: ds => {
     const d = docOf(ds); const old = document.title;
@@ -1284,10 +1837,23 @@ const ACTIONS = {
   recordPayment: ds => paymentForm(docOf(ds)),
   deletePayment: ds => { const inv = byId('invoices', ds.id); if (confirm('Remove this payment?')) { inv.payments = inv.payments.filter(p => p.id !== ds.pid); refresh(); } },
   voidInvoice: ds => { if (confirm('Void this invoice? It will stay in your records but no longer count as owed.')) { docOf(ds).void = true; refresh(); } },
-  quoteApprove: ds => { const q = docOf(ds); q.status = 'approved'; q.approvedAt = today(); q.sentAt ||= today(); refresh(); toast('Quote approved — schedule the job next'); },
-  quoteDecline: ds => { const q = docOf(ds); q.status = 'declined'; refresh(); },
+  quoteApprove: ds => {
+    const q = docOf(ds); q.status = 'approved'; q.approvedAt = today(); q.sentAt ||= today();
+    db.leads.forEach(l => { if (l.quoteId === q.id) { l.stage = 'won'; l.closedAt = today(); } });
+    refresh(); toast('Quote approved. Schedule the job next.');
+  },
+  quoteDecline: ds => {
+    const q = docOf(ds); q.status = 'declined';
+    db.leads.forEach(l => { if (l.quoteId === q.id) { l.stage = 'lost'; l.closedAt = today(); } });
+    refresh();
+  },
   quoteToJob: ds => { const q = docOf(ds); jobForm(null, { customerId: q.customerId, title: (q.items[0]?.desc || 'Job') + (q.items.length > 1 ? ' + more' : ''), items: structuredClone(q.items), discount: q.discount, taxRate: q.taxRate, quoteId: q.id, address: q.serviceAddress }); },
-  quoteToInvoice: ds => { const q = docOf(ds); const inv = invoiceFromItems(q, { quoteId: q.id, jobId: q.jobId }); q.status = 'converted'; q.invoiceId = inv.id; save(); go('#/invoices/' + inv.id); },
+  quoteToInvoice: ds => {
+    const q = docOf(ds), credit = depositCredit(q.id);
+    const inv = invoiceFromItems(q, { quoteId: q.id, jobId: q.jobId });
+    if (credit) inv.items.push(credit);
+    q.status = 'converted'; q.invoiceId = inv.id; save(); go('#/invoices/' + inv.id);
+  },
   newExpense: ds => expenseForm(null, ds.job ? { jobId: ds.job } : {}),
   editExpense: ds => expenseForm(byId('expenses', ds.id)),
   newIncome: () => incomeForm(), editIncome: ds => incomeForm(byId('incomes', ds.id)),
@@ -1302,10 +1868,19 @@ const ACTIONS = {
     download('expenses.csv', csv([['Date', 'Vendor', 'Category', 'Amount', 'Tax', 'Method', 'Job', 'Notes'], ...db.expenses.filter(e => inRange(e.date, f, t)).map(e => [e.date, e.vendor, e.category, e.amount, e.tax || 0, e.method, byId('jobs', e.jobId)?.title || '', e.notes])])); },
   exportMileage: () => { const v = location.hash.includes('reports') ? 'reports' : 'expenses'; const [f, t] = periodRange(filt(v, 'period', v === 'reports' ? 'ytd' : 'this_month'), state.filters[v]);
     download('mileage.csv', csv([['Date', 'Distance (' + db.settings.distanceUnit + ')', 'Purpose', 'Route'], ...db.mileage.filter(m => inRange(m.date, f, t)).map(m => [m.date, m.distance, m.purpose, m.route])])); },
-  exportBackup: () => { download(`business-hub-backup-${today()}.json`, JSON.stringify(db), 'application/json'); db.settings.lastBackup = today(); save(); },
+  exportBackup: async () => {
+    const name = `business-hub-backup-${today()}.json`, data = JSON.stringify(db);
+    db.settings.lastBackup = today(); save();
+    const file = typeof File === 'function' ? new File([data], name, { type: 'application/json' }) : null;
+    // On phones, the share sheet lets you save straight to Files, Google Drive or email.
+    if (file && matchMedia('(pointer: coarse)').matches && navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'Business Hub backup' }); render(); return; } catch (e) { if (e.name === 'AbortError') return; }
+    }
+    download(name, data, 'application/json'); toast('Backup downloaded'); render();
+  },
   importBackup: () => modal({ title: 'Restore from backup', submitLabel: 'Restore', body: '<p class="muted">This replaces all data in this browser with the backup file.</p><input type="file" accept=".json,application/json" name="file" required>',
     onSubmit: f => { const file = f.file.files[0]; if (!file) return false;
-      file.text().then(t => { try { const d = JSON.parse(t); if (!d.settings || !Array.isArray(d.invoices)) throw 0; db = normalize(d); refresh(); toast('Backup restored'); } catch { alert('That file is not a valid backup.'); } }); } }),
+      file.text().then(t => { try { const d = JSON.parse(t); if (!d.settings || !Array.isArray(d.invoices)) throw 0; db = normalize(d); refresh(); go('#/dashboard'); toast('Backup restored'); } catch { alert('That file is not a valid backup.'); } }); } }),
   eraseAll: () => { if (confirm('Erase ALL data in this browser? Download a backup first if you might need it.') && confirm('Are you absolutely sure?')) { const s = db.settings; db = blank(); if (confirm('Keep your business settings (name, logo, tax)?')) db.settings = s; refresh(); go('#/dashboard'); } },
   loadSample: () => { if ((db.customers.length || db.invoices.length) && !confirm('Add sample data alongside your existing data?')) return; loadSample(); refresh(); toast('Sample data loaded'); },
 };
@@ -1334,7 +1909,7 @@ document.addEventListener('click', e => {
   const row = e.target.closest('[data-href]');
   if (row && !e.target.closest('a,button')) { go(row.dataset.href); return; }
   const day = e.target.closest('[data-day]');
-  if (day) { state.calDay = day.dataset.day; if (day.dataset.day.slice(0, 7) !== state.calMonth) state.calMonth = day.dataset.day.slice(0, 7); render(); }
+  if (day && !e.target.closest('a,button,input,select')) { state.calDay = day.dataset.day; if (day.dataset.day.slice(0, 7) !== state.calMonth) state.calMonth = day.dataset.day.slice(0, 7); render(); }
 });
 document.addEventListener('input', e => {
   const f = e.target.dataset?.filter; if (!f || e.target.tagName === 'SELECT' || e.target.type === 'date') return;
@@ -1354,7 +1929,7 @@ document.addEventListener('submit', e => {
   const d = Object.fromEntries(new FormData(e.target));
   const cats = d.categories.split('\n').map(x => x.trim()).filter(Boolean);
   delete d.categories;
-  for (const k of ['taxRate', 'dueDays', 'mileageRate', 'nextInvoiceNo', 'nextQuoteNo', 'quoteValidDays']) d[k] = +d[k] || 0;
+  for (const k of ['taxRate', 'dueDays', 'mileageRate', 'nextInvoiceNo', 'nextQuoteNo', 'quoteValidDays', 'monthlyGoal']) d[k] = +d[k] || 0;
   Object.assign(db.settings, d);
   if (cats.length) db.categories = cats;
   refresh(); toast('Settings saved');
@@ -1366,13 +1941,71 @@ document.addEventListener('change', async e => {
 });
 document.addEventListener('click', e => { if (e.target.id === 'rmLogo') { db.settings.logo = ''; refresh(); } });
 
-// Mobile menu
-$('#menuBtn').addEventListener('click', () => {
-  $('#sidebar').classList.add('open');
-  const scrim = document.createElement('div'); scrim.className = 'scrim';
-  scrim.onclick = () => { $('#sidebar').classList.remove('open'); scrim.remove(); };
-  document.body.append(scrim);
+// Mobile menu & search
+$('#menuBtn').addEventListener('click', () => ACTIONS.openMenu());
+$('#searchBtn').addEventListener('click', () => openSearch());
+
+// Team filter on the schedule
+document.addEventListener('change', e => {
+  if (e.target.dataset?.actChange === 'calTeam') { state.calTeam = e.target.value; render(); }
 });
+
+// Quick-add to-do (dashboard, to-dos page, customer page)
+document.addEventListener('submit', e => {
+  const f = e.target.closest('.quick-task'); if (!f) return;
+  e.preventDefault();
+  const title = f.title.value.trim(); if (!title) return;
+  db.tasks.push({ id: uid(), title, due: f.due.value, customerId: f.dataset.customer || '', done: false, createdAt: today() });
+  refresh(); toast('To-do added');
+  $('.quick-task input[name=title]')?.focus();
+});
+
+// Job photos
+document.addEventListener('change', async e => {
+  if (!e.target.classList?.contains('js-job-photos')) return;
+  const j = byId('jobs', e.target.dataset.id); if (!j) return;
+  const files = [...e.target.files]; if (!files.length) return;
+  toast(`Adding ${files.length} photo${files.length > 1 ? 's' : ''}…`);
+  for (const file of files) {
+    try { (j.photos ||= []).push({ id: uid(), date: today(), src: await readImage(file, 1400, 0.7) }); }
+    catch { toast('Could not read one of the photos'); }
+  }
+  refresh(); toast('Photos saved');
+});
+
+// Drag & drop: jobs onto calendar days, leads onto pipeline stages (desktop)
+let dragging = null;
+const endDrag = () => { dragging = null; document.body.classList.remove('is-dragging'); $$('.drop-hover').forEach(x => x.classList.remove('drop-hover')); };
+document.addEventListener('dragstart', e => {
+  const j = e.target.closest?.('[data-drag-job]'), l = e.target.closest?.('[data-drag-lead]');
+  if (!j && !l) return;
+  dragging = j ? { type: 'job', id: j.dataset.dragJob } : { type: 'lead', id: l.dataset.dragLead };
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', dragging.id);
+  document.body.classList.add('is-dragging');
+});
+document.addEventListener('dragend', endDrag);
+const dropTarget = e => dragging && e.target.closest?.(dragging.type === 'job' ? '[data-day]' : '[data-stage]');
+document.addEventListener('dragover', e => {
+  const t = dropTarget(e); if (!t) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+  $$('.drop-hover').forEach(x => x !== t && x.classList.remove('drop-hover'));
+  t.classList.add('drop-hover');
+});
+document.addEventListener('drop', e => {
+  const t = dropTarget(e); if (!t) return;
+  e.preventDefault();
+  if (dragging.type === 'job') {
+    const j = byId('jobs', dragging.id);
+    if (j && j.date !== t.dataset.day) { j.date = t.dataset.day; state.calDay = j.date; toast(`Moved to ${fmtDateShort(j.date)}`); }
+  } else {
+    const l = byId('leads', dragging.id);
+    if (l && l.stage !== t.dataset.stage) { l.stage = t.dataset.stage; if (['won', 'lost'].includes(l.stage)) l.closedAt = today(); }
+  }
+  endDrag(); refresh();
+});
+// Keyboard: open lead cards with Enter
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.matches?.('.lead-card')) e.target.click(); });
 
 /* =====================================================================
  * Sample data
@@ -1390,7 +2023,7 @@ function loadSample() {
   const custs = people.map(([name, street], i) => ({ id: uid(), name, address: `${street}, Toronto, ON`, phone: `416-555-01${pad(10 + i * 7)}`,
     email: name.toLowerCase().replace(/[^a-z ]/g, '').replace(' ', '.') + '@example.com', createdAt: addMonths(t, -6), source: pick(['Referral', 'Google', 'Facebook / Instagram', 'Repeat customer']) }));
   db.customers.push(...custs);
-  const team = ['Onel', 'Mike', 'Onel'];
+  const team = ['Alex', 'Mike', 'Alex'];
   for (let k = -150; k <= 14; k += 1 + Math.floor(rnd() * 3)) {
     const date = addDays(t, k), c = pick(custs), s = pick(services.slice(0, 6));
     const items = [{ desc: s.name, qty: s.unit === 'hour' ? 2 + Math.floor(rnd() * 3) : 1, price: s.price, taxable: true }];
@@ -1423,12 +2056,33 @@ function loadSample() {
     db.expenses.push({ id: uid(), date: addDays(t, k), amount: amt, vendor: pick(vendors[cat]), category: cat, method: pick(['Debit', 'Credit card']), tax: round2(amt * r / (100 + r)), notes: '' });
   }
   for (let k = -60; k <= 0; k += 3) db.mileage.push({ id: uid(), date: addDays(t, k), distance: Math.round(15 + rnd() * 60), purpose: 'Driving to jobs' });
+  const leadPeople = [['Linda Park', 'Gutter cleaning', 180, 'new', 'Google'], ['Marcus Green', 'Pressure washing – driveway', 220, 'new', 'Facebook / Instagram'],
+    ['Olivia Brooks', 'Window cleaning (exterior)', 240, 'contacted', 'Referral'], ['Raj Singh', 'Deck staining', 900, 'contacted', 'Door knocking'],
+    ['Emma Laurent', 'Lawn maintenance (season)', 1200, 'quoted', 'Website'], ['Noah Fischer', 'Gutter guards install', 1400, 'won', 'Referral'],
+    ['Chloe Martin', 'Window cleaning (exterior)', 240, 'lost', 'Google']];
+  leadPeople.forEach(([name, service, value, stage, source], i) => {
+    const closed = ['won', 'lost'].includes(stage);
+    db.leads.push({ id: uid(), name, service, value, stage, source, phone: `647-555-01${pad(20 + i * 3)}`, email: '',
+      address: `${10 + i * 11} Spruce St, Toronto, ON`, followUp: closed ? '' : addDays(t, i - 2), createdAt: addDays(t, -i * 3),
+      closedAt: closed ? addDays(t, -i) : '', notes: '' });
+  });
+  [['Order gutter guard materials', 0], ['Call back about deck quote', -1], ['Renew liability insurance', 6], ['Post before/after photos online', 2]]
+    .forEach(([title, d]) => db.tasks.push({ id: uid(), title, due: addDays(t, d), done: false, createdAt: t }));
+  custs.forEach((c, i) => { c.source = ['Referral', 'Google', 'Facebook / Instagram', 'Repeat customer', 'Door knocking'][i % 5]; });
+  const ins = [...db.expenses].reverse().find(e => e.category === 'Insurance');
+  if (ins) { ins.recurring = true; ins.recurNext = addMonths(ins.date, 1); }
 }
 
 /* =====================================================================
  * Boot
  * ===================================================================== */
-window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
-render();
+window.addEventListener('hashchange', () => { $('#modalRoot').innerHTML = ''; render(); window.scrollTo(0, 0); });
+load().then(d => {
+  db = d; state.loaded = true;
+  processRecurring();
+  render();
+  if (storageMode === 'local') toast('Private browsing detected: data may not be kept. Download backups often.');
+});
+navigator.storage?.persist?.().catch(() => {}); // ask the browser not to clear our data
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

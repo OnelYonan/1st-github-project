@@ -1,5 +1,5 @@
 // Offline support: network first, fall back to the cached copy.
-const CACHE = 'bizhub-v1';
+const CACHE = 'bizhub-v2';
 const SHELL = ['./', 'index.html', 'css/styles.css', 'js/app.js', 'manifest.webmanifest', 'icons/icon.svg'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener('activate', e => {
