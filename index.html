@@ -2,11 +2,29 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Document</title>
+    <meta name="theme-color" content="#1d6fd8" />
+    <title>Business Hub</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icons/icon.svg" />
+    <link rel="stylesheet" href="css/styles.css" />
   </head>
   <body>
-   <h1>Hi my name is Onel Yonan</h1>
+    <div class="app">
+      <header class="mobile-bar">
+        <button class="btn-icon btn" id="menuBtn" aria-label="Open menu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+        </button>
+        <div class="brand"><div class="brand-logo js-logo">B</div><span class="brand-name js-bizname">Business Hub</span></div>
+      </header>
+      <aside class="sidebar" id="sidebar">
+        <div class="brand"><div class="brand-logo js-logo">B</div><span class="brand-name js-bizname">Business Hub</span></div>
+        <nav class="nav" id="nav"></nav>
+      </aside>
+      <main class="main" id="main"></main>
+    </div>
+    <div id="modalRoot"></div>
+    <script src="js/app.js"></script>
   </body>
 </html>

@@ -1,0 +1,11 @@
+{
+  "name": "Business Hub",
+  "short_name": "Business Hub",
+  "description": "Schedule jobs, send quotes and invoices, and track income and expenses.",
+  "start_url": "./#/dashboard",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6f9",
+  "theme_color": "#1d6fd8",
+  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
