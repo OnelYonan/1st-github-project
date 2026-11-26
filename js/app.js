@@ -359,17 +359,24 @@ function toast(msg, action) {
 function modal({ title, body, wide = false, submitLabel = 'Save', onSubmit, onMount, footExtra = '', noFoot = false, focus = true, cls = '' }) {
   const wrap = document.createElement('div');
   wrap.className = 'modal-backdrop ' + cls;
-  wrap.innerHTML = `<form class="modal ${wide ? 'wide' : ''}" autocomplete="off" role="dialog" aria-modal="true" aria-label="${esc(title)}">
-    <div class="modal-head"><h2>${esc(title)}</h2><button type="button" class="btn btn-icon" data-close aria-label="Close">✕</button></div>
+  const topSave = !noFoot && submitLabel.length <= 12; // long labels ("Charge $250.00") keep a big button at the bottom
+  wrap.innerHTML = `<form class="modal ${wide ? 'wide' : ''} ${noFoot ? 'no-foot' : ''} ${topSave ? 'top-save' : ''}" autocomplete="off" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <div class="modal-head">${noFoot ? '' : '<button type="button" class="sheet-btn js-sheet-cancel">Cancel</button>'}<h2>${esc(title)}</h2>${topSave ? `<button type="button" class="sheet-btn sheet-save js-sheet-save">${esc(submitLabel)}</button>` : ''}<button type="button" class="btn btn-icon modal-x" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div>
     <div class="modal-body">${body}</div>
     ${noFoot ? '' : `<div class="modal-foot">${footExtra}<span class="spacer"></span><button type="button" class="btn" data-close>Cancel</button><button class="btn btn-primary" type="submit">${esc(submitLabel)}</button></div>`}
   </form>`;
   $('#modalRoot').append(wrap);
   const form = $('form', wrap);
   let dirty = false;
-  const close = () => wrap.remove();
+  const close = () => {
+    if (!isPhone() || matchMedia('(prefers-reduced-motion: reduce)').matches) { wrap.remove(); return; }
+    wrap.classList.add('closing'); setTimeout(() => wrap.remove(), 220); // slide the sheet down first
+  };
   const requestClose = () => { if (!dirty || confirm('Discard your changes?')) close(); };
   wrap._requestClose = requestClose;
+  $('.js-sheet-cancel', wrap)?.addEventListener('click', requestClose);
+  $('.js-sheet-save', wrap)?.addEventListener('click', () => form.requestSubmit());
+  dragToClose($('.modal-head', wrap), form, requestClose);
   form.addEventListener('input', e => { if (!e.target.closest('[data-nodirty]')) dirty = true; });
   wrap.addEventListener('click', e => { if (e.target.closest('[data-close]')) requestClose(); });
   form.addEventListener('submit', e => {
@@ -384,6 +391,21 @@ function modal({ title, body, wide = false, submitLabel = 'Save', onSubmit, onMo
     setTimeout(() => { if (!form.contains(document.activeElement)) first.focus(); }, 30);
   }
   return { form, close };
+}
+/** Pull a sheet down by its header to close it, like iOS. */
+function dragToClose(handle, sheet, onClose) {
+  let y0 = null, dy = 0;
+  handle.addEventListener('touchstart', e => { if (!isPhone() || e.target.closest('button')) return; y0 = e.touches[0].clientY; dy = 0; sheet.style.transition = 'none'; }, { passive: true });
+  handle.addEventListener('touchmove', e => {
+    if (y0 === null) return;
+    dy = Math.max(0, e.touches[0].clientY - y0);
+    sheet.style.transform = `translateY(${dy}px)`;
+  }, { passive: true });
+  handle.addEventListener('touchend', () => {
+    if (y0 === null) return;
+    y0 = null; sheet.style.transition = 'transform .25s cubic-bezier(.2,.8,.2,1)'; sheet.style.transform = '';
+    if (dy > 110) onClose();
+  });
 }
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
@@ -747,6 +769,11 @@ const NAV = [
   ['label', 'Money'], ['income', 'Income', 'income'], ['expenses', 'Expenses', 'expense'], ['reports', 'Reports', 'reports'],
   ['label', 'Business'], ['team', 'Team & time', 'clock'], ['services', 'Price book', 'tag'], ['settings', 'Settings', 'settings'],
 ];
+/* Each section has its own colour, used for its icon tile in the sidebar and the More screen. */
+const TINT = { dashboard: '#007AFF', schedule: '#FF3B30', jobs: '#FF9500', tasks: '#34C759', canvass: '#30B0C7', leads: '#AF52DE',
+  customers: '#5856D6', quotes: '#FF9F0A', plans: '#32ADE6', invoices: '#34C759', income: '#30D158', expenses: '#FF453A',
+  reports: '#5E5CE6', team: '#FF2D55', services: '#A2845E', settings: '#8E8E93' };
+const SHORT = { canvass: 'Knocking', plans: 'Plans', team: 'Team', services: 'Price book', tasks: 'To-dos' };
 const BOTTOM_NAV = [['dashboard', 'Home', 'home'], ['schedule', 'Schedule', 'calendar'], ['canvass', 'Knock', 'map'], ['jobs', 'Jobs', 'jobs']];
 const state = { calMonth: today().slice(0, 7), calDay: today(), calView: 'month', calTeam: '', filters: {}, loaded: false };
 const filt = (view, key, def) => (state.filters[view] ||= {})[key] ?? def;
@@ -763,9 +790,12 @@ function renderChrome() {
   $('#mobileClock').innerHTML = clockWidget();
   const [, , detailId] = location.hash.split('/');
   $('#backBtn').hidden = !detailId;
+  const parent = NAV.find(n => n[0] === cur);
+  $('#backLabel').textContent = (location.hash.split('/')[1] === 'statement' ? 'Customer' : SHORT[cur] || parent?.[1]) || 'Back';
+  document.body.classList.toggle('has-back', !!detailId);
   $('#nav').innerHTML = `<button class="search-btn" data-act="openSearch">${icon('search')}<span>Search</span><kbd>Ctrl K</kbd></button>${clockWidget()}` +
     NAV.map(([k, l, ic]) => k === 'label' ? `<div class="nav-label">${l}</div>` :
-    `<a href="#/${k}" class="${cur === k ? 'active' : ''}">${icon(ic)}<span>${l}</span>${counts[k] ? `<span class="count">${counts[k]}</span>` : ''}</a>`).join('');
+    `<a href="#/${k}" class="${cur === k ? 'active' : ''}"><span class="nav-ic" style="--tint:${TINT[k]}">${icon(ic)}</span><span>${l}</span>${counts[k] ? `<span class="count">${counts[k]}</span>` : ''}</a>`).join('');
   $('#bottomNav').innerHTML = BOTTOM_NAV.map(([k, l, ic]) => `<a href="#/${k}" class="${cur === k ? 'active' : ''}">${icon(ic)}<span>${l}</span></a>`).join('') +
     `<button data-act="openMenu" class="${BOTTOM_NAV.some(b => b[0] === cur) ? '' : 'active'}">${icon('more')}<span>More</span></button>`;
   const theme = s.theme === 'auto' ? null : s.theme;
@@ -785,15 +815,27 @@ function render() {
   if (html !== undefined) $('#main').innerHTML = html + (id ? '' : fab(name));
   unmountView = view.mount?.(id) || null;
   hydrateImages($('#main'));
+  const h1 = $('#main .page-head h1');
+  $('#navTitle').textContent = h1 ? ([...h1.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim() || h1.textContent.trim()) : '';
+  const fa = !id && FAB_ACT[name];
+  if (fa) $$(`#main .page-head .actions > [data-act="${fa}"]`).forEach(b => b.classList.add('fab-dup'));
+  updateNavBar();
   const pageLabel = NAV.find(n => n[0] === name)?.[1];
   document.title = [id ? '' : pageLabel, db.settings.businessName || 'Business Hub'].filter(Boolean).join(' · ');
 }
 const isPhone = () => matchMedia('(max-width: 760px)').matches;
-const fab = name => {
-  const map = { dashboard: 'newJob', schedule: 'newJob', jobs: 'newJob', customers: 'newCustomer', quotes: 'newQuote',
-    invoices: 'newInvoice', expenses: 'newExpense', income: 'newIncome', services: 'newService', leads: 'newLead', tasks: 'newTask', plans: 'newPlan', team: 'newMember' };
-  return map[name] ? `<button class="fab no-print" data-act="${map[name]}" aria-label="Add">${icon('plus')}</button>` : '';
-};
+const FAB_ACT = { dashboard: 'newJob', schedule: 'newJob', jobs: 'newJob', customers: 'newCustomer', quotes: 'newQuote',
+  invoices: 'newInvoice', expenses: 'newExpense', income: 'newIncome', services: 'newService', leads: 'newLead', tasks: 'newTask', plans: 'newPlan', team: 'newMember' };
+const fab = name => FAB_ACT[name] ? `<button class="fab no-print" data-act="${FAB_ACT[name]}" aria-label="Add">${icon('plus')}</button>` : '';
+/** iOS large titles: once the big page title scrolls under the bar, show it small in the bar. */
+function updateNavBar() {
+  const bar = $('.mobile-bar'), h = $('#main .page-head h1');
+  if (!bar || !bar.offsetHeight) return;
+  const edge = bar.getBoundingClientRect().bottom;
+  document.body.classList.toggle('nb-scrolled', scrollY > 4);
+  document.body.classList.toggle('nb-show-title', h ? h.getBoundingClientRect().bottom < edge + 2 : scrollY > 30);
+}
+window.addEventListener('scroll', updateNavBar, { passive: true });
 const go = h => { if (location.hash === h) render(); else location.hash = h; };
 const refresh = () => { save(); render(); };
 const head = (title, actions = '', sub = '') => `<div class="page-head"><div><h1>${title}</h1>${sub ? `<div class="muted small">${sub}</div>` : ''}</div><div class="actions">${actions}</div></div>`;
@@ -905,14 +947,14 @@ VIEWS.dashboard = () => {
     `${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}${todayCount ? ` · ${plural(todayCount, 'job')} today` : ''}`) + welcome + `
   <div class="quick-actions show-sm">${btn('Job', 'newJob', '', '', 'calendar')}${btn('Quote', 'newQuote', '', '', 'quote')}${btn('Invoice', 'newInvoice', '', '', 'invoice')}${btn('Expense', 'newExpense', '', '', 'expense')}</div>
   <div class="grid grid-5 dash-stats">
-    <a class="card stat" href="#/income" style="color:inherit"><div class="label">Income this month</div><div class="value">${money(inc)}</div>
+    <a class="card stat" href="#/income" style="color:inherit"><div class="label"><span class="stat-ic" style="--tint:#34C759">${icon('income')}</span>Income this month</div><div class="value">${money(inc)}</div>
       ${goal ? `<div class="progress" title="${goalPct}% of goal"><i style="width:${goalPct}%"></i></div><div class="sub">${goalPct}% of ${money(goal)} goal</div>`
         : `<div class="sub">${delta === null ? 'Payments received' : `${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta)}% vs last month`}</div>`}</a>
-    <a class="card stat" href="#/expenses" style="color:inherit"><div class="label">Expenses this month</div><div class="value">${money(exp)}</div><div class="sub">${commissionsOwed(m0, m1) ? `incl. ${money(commissionsOwed(m0, m1))} commissions owed` : plural(db.expenses.filter(x => inRange(x.date, m0, m1)).length, 'expense')}</div></a>
-    <a class="card stat" href="#/reports" style="color:inherit"><div class="label">Profit this month</div><div class="value" style="color:${inc - exp < 0 ? 'var(--bad)' : 'inherit'}">${money(inc - exp)}</div><div class="sub">${inc ? Math.round((inc - exp) / inc * 100) + '% margin' : '—'}</div></a>
-    <a class="card stat" href="#/team" data-tabset="team:tab:pay" style="color:inherit"><div class="label">Paid to team this month</div><div class="value">${money(teamPaid)}</div>
+    <a class="card stat" href="#/expenses" style="color:inherit"><div class="label"><span class="stat-ic" style="--tint:#FF3B30">${icon('expense')}</span>Expenses this month</div><div class="value">${money(exp)}</div><div class="sub">${commissionsOwed(m0, m1) ? `incl. ${money(commissionsOwed(m0, m1))} commissions owed` : plural(db.expenses.filter(x => inRange(x.date, m0, m1)).length, 'expense')}</div></a>
+    <a class="card stat" href="#/reports" style="color:inherit"><div class="label"><span class="stat-ic" style="--tint:#007AFF">${icon('reports')}</span>Profit this month</div><div class="value" style="color:${inc - exp < 0 ? 'var(--bad)' : 'inherit'}">${money(inc - exp)}</div><div class="sub">${inc ? Math.round((inc - exp) / inc * 100) + '% margin' : '—'}</div></a>
+    <a class="card stat" href="#/team" data-tabset="team:tab:pay" style="color:inherit"><div class="label"><span class="stat-ic" style="--tint:#FF2D55">${icon('users')}</span>Paid to team this month</div><div class="value">${money(teamPaid)}</div>
       <div class="sub">${teamOwed ? `<span style="color:var(--warn)">${money(teamOwed)} still owed</span>` : paidBy.length ? paidBy.slice(0, 2).map(([n, v]) => `${esc(n)} ${money(v)}`).join(' · ') : 'No payouts yet'}</div></a>
-    <a class="card stat" href="#/invoices" style="color:inherit"><div class="label">Owed to you</div><div class="value">${money(ar)}</div><div class="sub">${open.length} open · <span style="color:${overdue.length ? 'var(--bad)' : 'inherit'}">${overdue.length} overdue</span></div></a>
+    <a class="card stat" href="#/invoices" style="color:inherit"><div class="label"><span class="stat-ic" style="--tint:#FF9500">${icon('invoice')}</span>Owed to you</div><div class="value">${money(ar)}</div><div class="sub">${open.length} open · <span style="color:${overdue.length ? 'var(--bad)' : 'inherit'}">${overdue.length} overdue</span></div></a>
   </div>
   ${attn.length ? `<div class="card show-sm" style="margin-top:16px"><div class="card-head"><h2>Needs attention</h2></div><div class="attn">${attnHTML}</div></div>` : ''}
   <div class="dash-grid">
@@ -1123,10 +1165,10 @@ function jobDetail(id) {
   const margin = revenue - tax > 0 ? Math.round(profit / (revenue - tax) * 100) : null;
   return head(`${esc(j.title)} ${badge(j.status)}`, statusBtns +
     (inv ? `<a class="btn" href="#/invoices/${inv.id}">${icon('invoice')}View invoice</a>` : btn('Create invoice', 'jobToInvoice', j.status === 'completed' ? 'btn-primary' : '', `data-id="${j.id}"`, 'invoice')) +
-    jobMenu, `<a href="#/jobs">← All jobs</a>${series ? ` · <a href="#/plans">${icon('repeat').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${ruleLabel(series.rule)}</a>` : ''}`) + `
+    jobMenu, `<a class="crumb" href="#/jobs">← All jobs</a>${series ? `<span class="crumb"> · </span><a href="#/plans">${icon('repeat').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"')} ${ruleLabel(series.rule)}</a>` : ''}`) + `
   <div class="grid grid-2">
     <div class="card"><h2 style="margin-bottom:10px">Details</h2>
-      <div class="stack" style="gap:8px">
+      <div class="stack info-list" style="gap:8px">
         <div><div class="muted small">Customer</div>${c ? `<a href="#/customers/${c.id}"><b>${esc(c.name)}</b></a>${c.phone ? ` <span class="muted small">${esc(c.phone)}</span>` : ''}` : '—'}</div>
         <div><div class="muted small">When</div>${j.date ? fmtDateShort(j.date) : 'Not scheduled yet'}${j.start ? `, ${fmtTime(j.start)}${j.end ? ' – ' + fmtTime(j.end) : ''}` : ''}</div>
         ${j.startedAt ? `<div><div class="muted small">Time on job</div>${fmtHours(worked)}${j.finishedAt ? '' : ' <span class="badge warn">running</span>'} <span class="muted small">(started ${fmtClock(j.startedAt)}${j.finishedAt ? ', finished ' + fmtClock(j.finishedAt) : ''})</span></div>` : ''}
@@ -1781,7 +1823,7 @@ function planDetail(id) {
     menuItem('Duplicate for another customer', 'dupPlan', `data-id="${p.id}"`, 'quote'),
     menuLink('View customer', `#/customers/${p.customerId}`, 'users'),
     menuItem('Delete', 'deletePlan', `data-id="${p.id}"`, 'trash', 'danger'),
-  ]), `<a href="#/plans">← All plans</a> · <a href="#/customers/${c.id}">${esc(c.name || '')}</a>`) + `
+  ]), `<a class="crumb" href="#/plans">← All plans</a><span class="crumb"> · </span><a href="#/customers/${c.id}">${esc(c.name || '')}</a>`) + `
   ${st === 'sent' ? `<div class="alert info no-print" style="margin:0 auto 12px;max-width:820px">${icon('share')}<span>Sent for signature ${fmtDate(p.sentAt)}. When ${esc(firstName(c.name))} signs, they send you a link. Open it on this device to record the signature.</span></div>` : ''}
   ${st === 'active' && !card ? `<div class="alert warn no-print" style="margin:0 auto 12px;max-width:820px">${icon('expense')}<span>No card on file for ${esc(c.name)}. <button class="link-btn" data-act="newCard" data-id="${c.id}">Add a card</button> so you can charge plan payments and fees.</span></div>` : ''}
   <div class="plan-layout">
@@ -1859,7 +1901,7 @@ async function sendPlan(p) {
   const mark = () => { p.status = 'sent'; p.sentAt = today(); save(); setTimeout(render, 300); };
   modal({ title: `Send ${p.number} for signature`, noFoot: true, body: `
     <p class="muted small" style="margin-top:0">${esc(c.name)} opens the link, reads the agreement, signs with their finger and taps <b>Send</b>. You’ll get a link back. Open it here to record the signature and start the plan.</p>
-    <div class="stack" style="gap:8px">
+    <div class="stack info-list" style="gap:8px">
       ${c.phone ? `<a class="btn btn-primary js-send" href="${smsHref(c.phone, msg)}">${icon('sms')}Text to ${esc(c.phone)}</a>` : ''}
       ${c.email ? `<a class="btn ${c.phone ? '' : 'btn-primary'} js-send" href="${mailHref(c.email, `Your service agreement ${p.number}`, msg)}">${icon('mail')}Email to ${esc(c.email)}</a>` : ''}
       <button type="button" class="btn js-copy">${icon('share')}Copy signing link</button>
@@ -2422,7 +2464,7 @@ async function stripeCardLink(c) {
   const msg = `Hi ${firstName(c.name)}, please add your card for ${db.settings.businessName || 'us'} on this secure Stripe page: ${link}`;
   modal({ title: 'Save a card with Stripe', noFoot: true, body: `
     <p class="muted small" style="margin-top:0">${esc(c.name)} types their card on Stripe’s secure page. The full number goes straight to Stripe and never touches this app. Once they’re done, the card appears here automatically.</p>
-    <div class="stack" style="gap:8px">
+    <div class="stack info-list" style="gap:8px">
       <a class="btn btn-primary" href="${esc(link)}" target="_blank" rel="noopener">${icon('expense')}Customer is here: enter the card on this device</a>
       ${c.phone ? `<a class="btn" href="${smsHref(c.phone, msg)}">${icon('sms')}Text the link to ${esc(c.phone)}</a>` : ''}
       ${c.email ? `<a class="btn" href="${mailHref(c.email, 'Add your card', msg)}">${icon('mail')}Email the link</a>` : ''}
@@ -2494,7 +2536,7 @@ async function sendPayLink(inv) {
   const msg = docMessage('invoice', inv, 'send', url);
   modal({ title: `Pay-online link · ${inv.number}`, noFoot: true, body: `
     <p class="muted small" style="margin-top:0">${esc(c.name || 'Your customer')} pays ${money(balance(inv))} on Stripe’s secure page by card, Apple Pay or Google Pay. The invoice is marked paid when you open it again.</p>
-    <div class="stack" style="gap:8px">
+    <div class="stack info-list" style="gap:8px">
       ${c.phone ? `<a class="btn btn-primary js-sent" href="${smsHref(c.phone, msg)}">${icon('sms')}Text to ${esc(c.phone)}</a>` : ''}
       ${c.email ? `<a class="btn ${c.phone ? '' : 'btn-primary'} js-sent" href="${mailHref(c.email, `Invoice ${inv.number} from ${db.settings.businessName || ''}`, msg)}">${icon('mail')}Email to ${esc(c.email)}</a>` : ''}
       <button type="button" class="btn js-copy">${icon('share')}Copy link</button>
@@ -2750,7 +2792,7 @@ function customerDetail(id) {
     moreMenu([menuItem('Edit customer', 'editCustomer', `data-id="${id}"`, 'edit'), menuItem('New invoice', 'newInvoice', `data-cust="${id}"`, 'invoice'),
       menuItem('Add to-do', 'newTask', `data-cust="${id}"`, 'todo'), menuItem('New service plan', 'newPlan', `data-cust="${id}"`, 'repeat'),
       menuItem('Add card on file', 'newCard', `data-id="${id}"`, 'expense'), s.owing && menuLink('Print statement', `#/statement/${id}`, 'statement'),
-      menuItem('Delete customer', 'deleteCustomer', `data-id="${id}"`, 'trash', 'danger')]), '<a href="#/customers">← All customers</a>') + `
+      menuItem('Delete customer', 'deleteCustomer', `data-id="${id}"`, 'trash', 'danger')]), '<a class="crumb" href="#/customers">← All customers</a>') + `
   <div class="grid grid-3">
     <div class="card"><h2 style="margin-bottom:8px">Contact</h2>
       <div class="stack" style="gap:6px">${c.phone ? `<div>${esc(c.phone)}</div>` : ''}${c.email ? `<div>${esc(c.email)}</div>` : ''}${c.address ? `<div>${esc(c.address)}</div>` : ''}
@@ -2918,7 +2960,7 @@ function docView(type, id) {
       (status === 'sent' || status === 'expired' ? a('Follow up', 'docFollow', '', 'sms') : send) + a('Print / PDF', 'docPrint', '', 'print');
   const pays = isInv ? (d.payments || []) : [];
   const canMarkSent = isInv ? !d.sent && status === 'draft' : d.status === 'draft';
-  return head(`${isInv ? 'Invoice' : 'Quote'} ${esc(d.number)} ${badge(status)}`, '', `<a href="#/${coll}">← All ${coll}</a> · <a href="#/customers/${c.id}">${esc(c.name || '')}</a>`) + `
+  return head(`${isInv ? 'Invoice' : 'Quote'} ${esc(d.number)} ${badge(status)}`, '', `<a class="crumb" href="#/${coll}">← All ${coll}</a><span class="crumb"> · </span><a href="#/customers/${c.id}">${esc(c.name || '')}</a>`) + `
     <div class="doc-actions">${actions}${moreMenu([
       canMarkSent && menuItem('Mark as sent', 'markSent', `data-id="${id}" data-type="${type}"`, 'check'),
       isInv && ['overdue', 'partial'].includes(status) && menuItem('Email invoice', 'docEmail', `data-id="${id}" data-type="${type}"`, 'mail'),
@@ -3946,7 +3988,7 @@ const ACTIONS = {
       const groups = [{ label: '', items: [] }];
       NAV.forEach(([k, l, ic]) => (k === 'label' ? groups.push({ label: l, items: [] }) : groups.at(-1).items.push([k, l, ic])));
       modal({ title: 'All sections', noFoot: true, focus: false, body: groups.map(gr => `<h3 class="group-label">${esc(gr.label)}</h3>
-        <div class="app-grid">${gr.items.map(([k, l, ic]) => `<a class="app-tile ${k === cur ? 'active' : ''}" href="#/${k}"><span class="app-tile-ic">${icon(ic)}</span><span>${esc(l)}</span></a>`).join('')}</div>`).join('') });
+        <div class="app-grid">${gr.items.map(([k, l, ic]) => `<a class="app-tile ${k === cur ? 'active' : ''}" href="#/${k}"><span class="app-tile-ic" style="--tint:${TINT[k]}">${icon(ic)}</span><span>${esc(l)}</span></a>`).join('')}</div>`).join('') });
       return;
     }
     $('#sidebar').classList.add('open');
@@ -4329,9 +4371,18 @@ function loadSample() {
 /* =====================================================================
  * Boot
  * ===================================================================== */
-window.addEventListener('hashchange', () => {
-  $('#modalRoot').innerHTML = ''; render(); window.scrollTo(0, 0);
-  const m = $('#main'); m.classList.remove('page-enter'); void m.offsetWidth; m.classList.add('page-enter');
+const depthOf = h => { const [, n, id] = (h || '').split('#')[1]?.split('/') || []; return n === 'statement' ? 3 : id ? 2 : 1; };
+const scrollMem = {};
+let lastHash = location.hash;
+window.addEventListener('hashchange', e => {
+  scrollMem[lastHash] = scrollY;
+  const from = depthOf(lastHash), to = depthOf(location.hash);
+  const dir = to > from ? 'push' : to < from ? 'pop' : 'swap';
+  lastHash = location.hash;
+  $('#modalRoot').innerHTML = ''; render();
+  window.scrollTo(0, dir === 'pop' ? scrollMem[location.hash] || 0 : 0);
+  updateNavBar();
+  const m = $('#main'); m.classList.remove('nav-push', 'nav-pop', 'nav-swap'); void m.offsetWidth; m.classList.add('nav-' + dir);
 });
 $('#backBtn').addEventListener('click', () => {
   const [, name] = location.hash.split('/');

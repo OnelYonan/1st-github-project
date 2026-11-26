@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#161b22" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
     <meta name="description" content="Schedule jobs, send quotes and invoices, and track income and expenses." />
     <!-- iPhone: open full-screen like an app when added to the Home Screen -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -16,23 +16,30 @@
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="icons/icon-180.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
     <link rel="stylesheet" href="css/styles.css" />
   </head>
   <body>
     <div class="app">
       <header class="mobile-bar">
-        <button class="btn-icon btn" id="backBtn" aria-label="Back" hidden>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
-        </button>
-        <button class="btn-icon btn" id="menuBtn" aria-label="Open menu">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-        </button>
-        <div class="brand"><div class="brand-logo js-logo">B</div><span class="brand-name js-bizname">Business Hub</span></div>
-        <span class="spacer"></span>
-        <span id="mobileClock"></span>
-        <button class="btn-icon btn" id="searchBtn" aria-label="Search">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-        </button>
+        <div class="nb-side">
+          <button class="nb-back" id="backBtn" aria-label="Back" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m15 19-7-7 7-7"/></svg><span id="backLabel">Back</span>
+          </button>
+          <button class="btn-icon btn" id="menuBtn" aria-label="Open menu">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+          </button>
+          <div class="brand nb-brand"><div class="brand-logo js-logo">B</div></div>
+        </div>
+        <div class="nb-title" id="navTitle" aria-hidden="true"></div>
+        <div class="nb-side nb-right">
+          <span id="mobileClock"></span>
+          <button class="nb-icon" id="searchBtn" aria-label="Search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><circle cx="11" cy="11" r="7.5"/><path d="m20.5 20.5-4.2-4.2"/></svg>
+          </button>
+        </div>
       </header>
       <aside class="sidebar" id="sidebar">
         <div class="brand"><div class="brand-logo js-logo">B</div><span class="brand-name js-bizname">Business Hub</span></div>

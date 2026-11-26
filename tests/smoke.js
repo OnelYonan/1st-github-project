@@ -16,7 +16,9 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  page.on('console', m => m.type() === 'error' && errors.push(m.text()));
+  // outside services (address look-up, web font) can be blocked by the test machine's network: not an app bug
+  const external = t => /photon\.komoot\.io|fonts\.(googleapis|gstatic)\.com|net::ERR_FAILED/.test(t);
+  page.on('console', m => m.type() === 'error' && !external(m.text()) && errors.push(m.text()));
   let acceptDialogs = true;
   page.on('dialog', d => (acceptDialogs ? d.accept() : d.dismiss()));
   const go = async hash => { await page.goto(URL + hash); await page.waitForSelector('.page-head, .map-screen'); };

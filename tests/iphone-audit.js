@@ -75,7 +75,9 @@ const findOverflow = () => {
     ['#/leads', '.page-head button:has-text("New lead")', 'lead form'], ['#/team', '.page-head button:has-text("Add team member")', 'team member form']];
   for (const [h, sel, label] of forms) {
     await go(h);
-    if (await page.locator(sel).count()) { await page.click(sel); await audit(label); await closeModal(); }
+    // on phones the header's "New …" button is folded into the floating + button
+    const target = (await page.locator(sel).isVisible().catch(() => false)) ? sel : '.fab';
+    if (await page.locator(target).count()) { await page.click(target); await audit(label); await closeModal(); }
     else console.log(`- skipped ${label} (no button in page header)`);
   }
   await go('#/dashboard'); await page.click('.bottom-nav button'); await audit('bottom nav More'); await closeModal();
