@@ -36,6 +36,7 @@ Your own booking and business-management app for a home-services business: sched
 - Income, expenses (receipt photos, recurring expenses), mileage, and reports (profit and loss, sales tax, aging, lead sources, team).
 
 **Business**
+- **Commissions**: a cleaner % per job and a sales-rep % per sale (defaults 20% and 25%, changeable per person or job). Each job shows everyone's cut and what you keep, a Commissions tab shows what's owed each week or month, and "Mark paid" records the payout as an expense.
 - **Team & time**: team members with roles, pay rates and calendar colours, **clock in/out**, and weekly **timesheets** with approval and pay totals.
 - **Price book** and **Settings**, organised into tabs.
 
@@ -65,4 +66,6 @@ python3 -m http.server 8765      # in this folder
 node tests/smoke.js              # end-to-end check (needs Playwright)
 node tests/mock-pay-server.mjs & # fake Stripe + the real payment server
 node tests/stripe.js             # Stripe flows
+node tests/commission.js         # commission maths
+node tests/iphone-audit.js       # nothing off-screen on an iPhone
 ```

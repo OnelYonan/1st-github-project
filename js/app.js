@@ -102,6 +102,7 @@ const DEFAULT_SETTINGS = {
   planPrefix: 'SP-', nextPlanNo: 1001, planTermMonths: 12, planMinVisits: 2, cancelFee: 50, planTerms: '',
   processor: '', processorUrl: '', cardSetupLink: '', meId: '',
   stripeUrl: '', stripeToken: '', stripeStatus: null, autoChargePlans: false, saveCardOnPay: true,
+  cleanerPct: 20, salesPct: 25, salesScope: 'first',
   tplInvoice: 'Hi {first}, here is invoice {number} from {business} for {total}, due {due}.\n\n{items}\n\n{pay}\n\nThank you!\n{signature}',
   tplReminder: 'Hi {first}, a friendly reminder that invoice {number} for {balance} was due {due}.\n\n{pay}\n\nIf you have already paid, please ignore this message. Thank you!\n{signature}',
   tplQuote: 'Hi {first}, thanks for the opportunity! Here is quote {number} from {business} for {total}, valid until {valid}.\n\n{items}\n\nJust reply to let me know if you would like to go ahead and we will get you booked in.\n{signature}',
@@ -461,7 +462,7 @@ function undoToast(snap, msg) {
 function moreMenu(items, label = 'More') {
   const html = items.filter(Boolean).join('');
   if (!html) return '';
-  return `<div class="menu-wrap"><button type="button" class="btn" data-menu aria-haspopup="true" aria-expanded="false">${icon('more')}${label}</button><div class="menu" role="menu">${html}</div></div>`;
+  return `<div class="menu-wrap"><button type="button" class="btn" data-menu aria-haspopup="true" aria-expanded="false">${icon('more')}${label}</button><div class="menu" role="menu">${html}<button type="button" class="menu-item menu-cancel">Cancel</button></div></div>`;
 }
 const menuItem = (label, act, data = '', ic = '', cls = '') => `<button type="button" class="menu-item ${cls}" role="menuitem" data-act="${act}" ${data}>${ic ? icon(ic) : ''}${label}</button>`;
 const menuLink = (label, href, ic = '') => `<a class="menu-item" role="menuitem" href="${href}">${ic ? icon(ic) : ''}${label}</a>`;
@@ -691,6 +692,8 @@ function renderChrome() {
   const counts = { leads: db.leads.filter(l => l.stage === firstStage()).length,
     tasks: db.tasks.filter(t => !t.done && t.due && t.due <= today()).length, plans: db.subscriptions.filter(x => x.status === 'sent').length, canvass: comebacksDue().length };
   $('#mobileClock').innerHTML = clockWidget();
+  const [, , detailId] = location.hash.split('/');
+  $('#backBtn').hidden = !detailId;
   $('#nav').innerHTML = `<button class="search-btn" data-act="openSearch">${icon('search')}<span>Search</span><kbd>Ctrl K</kbd></button>${clockWidget()}` +
     NAV.map(([k, l, ic]) => k === 'label' ? `<div class="nav-label">${l}</div>` :
     `<a href="#/${k}" class="${cur === k ? 'active' : ''}">${icon(ic)}<span>${l}</span>${counts[k] ? `<span class="count">${counts[k]}</span>` : ''}</a>`).join('');
@@ -708,10 +711,11 @@ function render() {
   renderChrome();
   $('#sidebar').classList.remove('open'); $('.scrim')?.remove();
   const html = view(id ? decodeURIComponent(id) : undefined);
-  if (html !== undefined) $('#main').innerHTML = html + fab(name);
+  if (html !== undefined) $('#main').innerHTML = html + (id ? '' : fab(name));
   view.mount?.(id);
   document.title = (db.settings.businessName || 'Business Hub');
 }
+const isPhone = () => matchMedia('(max-width: 760px)').matches;
 const fab = name => {
   const map = { dashboard: 'newJob', schedule: 'newJob', jobs: 'newJob', customers: 'newCustomer', quotes: 'newQuote',
     invoices: 'newInvoice', expenses: 'newExpense', income: 'newIncome', services: 'newService', leads: 'newLead', tasks: 'newTask', plans: 'newPlan', team: 'newMember' };
@@ -736,7 +740,7 @@ VIEWS.dashboard = () => {
   const [l0, l1] = periodRange('last_month');
   const inc = sum(incomeEntries().filter(x => inRange(x.date, m0, m1)), x => x.amount);
   const incLast = sum(incomeEntries().filter(x => inRange(x.date, l0, l1)), x => x.amount);
-  const exp = sum(db.expenses.filter(x => inRange(x.date, m0, m1)), x => x.amount);
+  const exp = round2(sum(db.expenses.filter(x => inRange(x.date, m0, m1)), x => x.amount) + commissionsOwed(m0, m1));
   const open = db.invoices.filter(isOpenInv);
   const overdue = open.filter(i => invStatus(i) === 'overdue');
   const ar = sum(open, balance);
@@ -763,13 +767,17 @@ VIEWS.dashboard = () => {
     [db.quotes.length + db.invoices.length > 0, 'Send your first quote or invoice', '#/quotes'],
   ];
   const setupLeft = setupSteps.filter(x => !x[0]).length;
-  const welcome = isEmpty ? `<div class="card" style="margin-bottom:16px"><h2>Welcome! Let’s get your business set up 👋</h2>
+  const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const installTip = isIOS && !navigator.standalone && !matchMedia('(display-mode: standalone)').matches && !s.hideInstall
+    ? `<div class="card install-tip"><img src="icons/icon-180.png" alt="" width="44" height="44"><div class="grow"><b>Install Business Hub</b>
+      <div class="small muted">Tap <span class="share-ic" aria-label="Share">${icon('share')}</span> then <b>Add to Home Screen</b>. It opens full-screen like an app.</div></div>${btn('✕', 'hideInstall', 'btn-icon', 'aria-label="Dismiss"')}</div>` : '';
+  const welcome = installTip + (isEmpty ? `<div class="card" style="margin-bottom:16px"><h2>Welcome! Let’s get your business set up 👋</h2>
     <p class="muted">Add your business details and logo so they appear on quotes and invoices, then add your first customer.
     Want to look around first? Load sample data. You can erase it any time from Settings.</p>
     <div class="row"><a class="btn btn-primary" href="#/settings">Set up my business</a>${btn('Add a customer', 'newCustomer')}${btn('Load sample data', 'loadSample')}</div></div>`
     : setupLeft && !s.hideSetup ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Getting started · ${4 - setupLeft} of 4 done</h2>${btn('Hide', 'hideSetup', 'btn-sm')}</div>
       <div class="progress" style="margin-bottom:10px"><i style="width:${(4 - setupLeft) * 25}%"></i></div>
-      ${setupSteps.map(([done, label, href]) => `<a class="setup-step ${done ? 'done' : ''}" href="${href}">${icon(done ? 'check' : 'plus')}<span>${label}</span></a>`).join('')}</div>` : '';
+      ${setupSteps.map(([done, label, href]) => `<a class="setup-step ${done ? 'done' : ''}" href="${href}">${icon(done ? 'check' : 'plus')}<span>${label}</span></a>`).join('')}</div>` : '');
 
   const knockDue = comebacksDue();
   const readyToCharge = stripeOn() ? open.filter(i => stripeCard(i.customerId)) : [];
@@ -817,7 +825,7 @@ VIEWS.dashboard = () => {
     <a class="card stat" href="#/income" style="color:inherit"><div class="label">Income this month</div><div class="value">${money(inc)}</div>
       ${goal ? `<div class="progress" title="${goalPct}% of goal"><i style="width:${goalPct}%"></i></div><div class="sub">${goalPct}% of ${money(goal)} goal</div>`
         : `<div class="sub">${delta === null ? 'Payments received' : `${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta)}% vs last month`}</div>`}</a>
-    <a class="card stat" href="#/expenses" style="color:inherit"><div class="label">Expenses this month</div><div class="value">${money(exp)}</div><div class="sub">${plural(db.expenses.filter(x => inRange(x.date, m0, m1)).length, 'expense')}</div></a>
+    <a class="card stat" href="#/expenses" style="color:inherit"><div class="label">Expenses this month</div><div class="value">${money(exp)}</div><div class="sub">${commissionsOwed(m0, m1) ? `incl. ${money(commissionsOwed(m0, m1))} commissions owed` : plural(db.expenses.filter(x => inRange(x.date, m0, m1)).length, 'expense')}</div></a>
     <a class="card stat" href="#/reports" style="color:inherit"><div class="label">Profit this month</div><div class="value" style="color:${inc - exp < 0 ? 'var(--bad)' : 'inherit'}">${money(inc - exp)}</div><div class="sub">${inc ? Math.round((inc - exp) / inc * 100) + '% margin' : '—'}</div></a>
     <a class="card stat" href="#/invoices" style="color:inherit"><div class="label">Owed to you</div><div class="value">${money(ar)}</div><div class="sub">${open.length} open · <span style="color:${overdue.length ? 'var(--bad)' : 'inherit'}">${overdue.length} overdue</span></div></a>
   </div>
@@ -999,7 +1007,8 @@ function jobDetail(id) {
   const c = cust(j.customerId), inv = j.invoiceId && byId('invoices', j.invoiceId);
   const exps = db.expenses.filter(e => e.jobId === j.id);
   const revenue = jobValue(j), cost = sum(exps, e => e.amount), tax = inv ? totals(inv).tax : totals(j).tax;
-  const profit = revenue - tax - cost;
+  const pay = jobPay(j);
+  const profit = revenue - tax - cost - pay.cleaner - pay.sales;
   const addr = j.address || c?.address || '';
   const statusBtns = {
     scheduled: btn('Start job', 'jobStatus', '', `data-id="${j.id}" data-s="in_progress"`, 'clock') + btn('Complete', 'jobStatus', 'btn-primary', `data-id="${j.id}" data-s="completed"`, 'check'),
@@ -1037,6 +1046,7 @@ function jobDetail(id) {
         ${j.startedAt ? `<div><div class="muted small">Time on job</div>${fmtHours(worked)}${j.finishedAt ? '' : ' <span class="badge warn">running</span>'} <span class="muted small">(started ${fmtClock(j.startedAt)}${j.finishedAt ? ', finished ' + fmtClock(j.finishedAt) : ''})</span></div>` : ''}
         ${addr ? `<div><div class="muted small">Address</div><a target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addr)}">${esc(addr)} ↗</a></div>` : ''}
         ${j.assignedTo ? `<div><div class="muted small">Assigned to</div>${memberColor(j.assignedTo) ? `<span class="dot" style="background:${memberColor(j.assignedTo)}"></span>` : ''}${esc(j.assignedTo)}</div>` : ''}
+        ${j.salesRep ? `<div><div class="muted small">Sold by</div>${esc(j.salesRep)}</div>` : ''}
         ${j.planId && byId('subscriptions', j.planId) ? `<div><div class="muted small">Service plan</div><a href="#/plans/${j.planId}">${esc(byId('subscriptions', j.planId).number)} · ${esc(byId('subscriptions', j.planId).name)}</a></div>` : ''}
         ${j.quoteId && byId('quotes', j.quoteId) ? `<div><div class="muted small">From quote</div><a href="#/quotes/${j.quoteId}">${esc(byId('quotes', j.quoteId).number)}</a></div>` : ''}
         ${j.notes ? `<div><div class="muted small">Notes</div><div style="white-space:pre-wrap">${esc(j.notes)}</div></div>` : ''}
@@ -1049,9 +1059,13 @@ function jobDetail(id) {
     <div class="card"><div class="card-head"><h2>Job costing</h2>${btn('Add expense', 'newExpense', 'btn-sm', `data-job="${j.id}"`, 'plus')}</div>
       <div class="grid grid-3" style="gap:8px;margin-bottom:12px">
         <div><div class="muted small">Revenue (pre-tax)</div><b class="num">${money(revenue - tax)}</b></div>
-        <div><div class="muted small">Costs</div><b class="num">${money(cost)}</b></div>
+        <div><div class="muted small">Commissions + costs</div><b class="num">${money(cost + pay.cleaner + pay.sales)}</b></div>
         <div><div class="muted small">Profit</div><b class="num" style="color:${profit < 0 ? 'var(--bad)' : 'var(--good)'}">${money(profit)}</b>${margin !== null ? ` <span class="muted small">${margin}%</span>` : ''}</div>
       </div>
+      ${j.assignedTo || j.salesRep ? `<div class="pay-sum" style="margin:0 0 10px">
+        ${j.assignedTo ? `<div class="pay-row"><span>${esc(j.assignedTo)} (cleaner, ${pay.cPct}%)${j.cleanerPaid ? ' <span class="badge good">paid</span>' : ''}</span><b>−${money(pay.cleaner)}</b></div>` : ''}
+        ${j.salesRep ? `<div class="pay-row"><span>${esc(j.salesRep)} (sales, ${pay.sPct}%)${j.salesPaid ? ' <span class="badge good">paid</span>' : ''}</span><b>−${money(pay.sales)}</b></div>` : ''}
+        <div class="pay-row keep"><span>You keep after commissions${cost ? ' and costs' : ''}</span><b>${money(profit)}</b></div></div>` : ''}
       ${exps.length ? exps.map(e => `<div class="list-item clickable" data-act="editExpense" data-id="${e.id}"><div class="grow"><div class="title">${esc(e.vendor || e.category)}</div><div class="muted small">${fmtDate(e.date)} · ${esc(e.category)}</div></div><span class="num">${money(e.amount)}</span></div>`).join('')
         : '<p class="muted small">Link materials, subcontractor and other costs to this job to see your real profit.</p>'}
     </div>
@@ -1186,7 +1200,8 @@ VIEWS.team = () => {
   const tab = filt('team', 'tab', 'team');
   const ws = state.tsWeek || addDays(today(), -parseD(today()).getDay());
   const we = addDays(ws, 6);
-  const tabs = tabsHTML('team', 'tab', [['team', `Team (${db.team.length})`], ['time', 'Timesheets']], tab);
+  const tabs = tabsHTML('team', 'tab', [['team', `Team (${db.team.length})`], ['time', 'Timesheets'], ['pay', 'Commissions']], tab);
+  if (tab === 'pay') return commissionsHTML(tabs);
   if (tab === 'team') {
     return head('Team & time', btn('Add team member', 'newMember', 'btn-primary', '', 'plus'), 'Your crew, their hours and who is working right now.') + `<div class="card">${tabs}
       ${db.team.length ? `<div class="team-grid">${db.team.map(m => {
@@ -1238,6 +1253,8 @@ function memberForm(m) {
     ${field('Phone', inp('phone', m.phone, 'type="tel"'))}${field('Email', inp('email', m.email, 'type="email"'))}
     ${field('Role', `<select name="role">${opts(['Owner', 'Manager', 'Technician', 'Sales', 'Office', 'Subcontractor'], m.role)}</select>`)}
     ${field('Hourly pay (optional)', inp('rate', m.rate || '', 'type="number" min="0" step="0.25" inputmode="decimal"'))}
+    ${field('Cleaner commission %', `<div class="pct-input">${inp('cleanerPct', m.cleanerPct ?? '', `type="number" min="0" max="100" step="0.5" placeholder="Default ${db.settings.cleanerPct}"`)}<span>%</span></div>`)}
+    ${field('Sales commission %', `<div class="pct-input">${inp('salesPct', m.salesPct ?? '', `type="number" min="0" max="100" step="0.5" placeholder="Default ${db.settings.salesPct}"`)}<span>%</span></div>`)}
     <div class="field full"><label>Calendar colour</label><div class="row">${TEAM_COLORS.map(c => `<label class="swatch"><input type="radio" name="color" value="${c}" ${c === m.color ? 'checked' : ''}><span style="background:${c}"></span></label>`).join('')}</div></div>
   </div>`, footExtra: isNew ? '' : `<button type="button" class="btn btn-danger js-del">Remove</button>`,
     onMount: (f, close) => $('.js-del', f)?.addEventListener('click', () => {
@@ -1246,7 +1263,8 @@ function memberForm(m) {
     }),
     onSubmit: (f, d) => {
       const oldName = m.name;
-      Object.assign(m, { name: d.name.trim(), phone: d.phone, email: d.email.trim(), role: d.role, rate: +d.rate || 0, color: d.color || m.color });
+      Object.assign(m, { name: d.name.trim(), phone: d.phone, email: d.email.trim(), role: d.role, rate: +d.rate || 0, color: d.color || m.color,
+        cleanerPct: d.cleanerPct === '' ? null : +d.cleanerPct, salesPct: d.salesPct === '' ? null : +d.salesPct });
       if (isNew) { m.id = uid(); db.team.push(m); }
       else if (oldName && oldName !== m.name) db.jobs.forEach(j => { if (j.assignedTo === oldName) j.assignedTo = m.name; });
       refresh(); toast(isNew ? `${m.name} added` : 'Saved');
@@ -1551,6 +1569,7 @@ function planForm(p, preset = {}) {
     ${field('Service address', addrInput('address', p.address ?? cust(p.customerId)?.address ?? ''), 'full')}
     ${field('First visit / start date *', inp('start', p.start, 'type="date" required'))}
     ${assigneeField(p.assignedTo)}
+    ${field('Sold by (sales rep)', memberSelect('salesRep', p.salesRep ?? cust(p.customerId)?.salesRep, 'No sales rep'))}
   </div></div>
   <div class="js-terms">${planTermsFields(p)}</div>
   <div class="form-section"><h3>Main service &amp; price</h3><div class="js-items-wrap">${itemsEditorHTML(p)}</div></div>
@@ -1578,7 +1597,7 @@ function planForm(p, preset = {}) {
       delete p._get; delete p._addons;
       const before = isNew ? '' : planCanonical(p);
       Object.assign(p, readPlanTerms(f, d), { customerId: d.customerId, templateId: d.templateId || p.templateId || '', name: d.name.trim(), address: d.address,
-        start: d.start, assignedTo: d.assignedTo, items, addons, discount: +d.discount || 0, taxRate: d.taxRate === '' ? s.taxRate : +d.taxRate,
+        start: d.start, assignedTo: d.assignedTo, salesRep: d.salesRep || '', items, addons, discount: +d.discount || 0, taxRate: d.taxRate === '' ? s.taxRate : +d.taxRate,
         terms: d.terms.trim() === (s.planTerms || BH.DEFAULT_TERMS).trim() ? '' : d.terms });
       p.end = '';
       if (isNew) { Object.assign(p, { id: uid(), number: nextPlanNumber(), status: 'draft', createdAt: today() }); db.subscriptions.push(p); }
@@ -1797,7 +1816,7 @@ function addPlanVisits(p, from, to) {
     const visitItems = planVisitItems(p, i === 0);
     const work = visitItems.map(it => `• ${it.desc}${it.addon ? ' (add-on)' : ''}`).join('\n');
     db.jobs.push({ id: uid(), createdAt: today(), customerId: p.customerId, title: p.name, date, start: '', end: '', address: p.address || cust(p.customerId)?.address || '',
-      assignedTo: p.assignedTo || '', status: 'scheduled', notes: `Service plan ${p.number}\nThis visit:\n${work}`, items: perVisit ? structuredClone(visitItems) : [], discount: perVisit ? p.discount : 0,
+      assignedTo: p.assignedTo || '', salesRep: p.salesRep && (db.settings.salesScope === 'every' || (i === 0 && !db.jobs.some(x => x.planId === p.id))) ? p.salesRep : '', status: 'scheduled', notes: `Service plan ${p.number}\nThis visit:\n${work}`, items: perVisit ? structuredClone(visitItems) : [], discount: perVisit ? p.discount : 0,
       taxRate: p.taxRate, seriesId: p.seriesId, seriesRule: p.rule, planId: p.id, noInvoice: !perVisit });
   });
   return dates.length;
@@ -2175,7 +2194,8 @@ function pinToCustomer(p) {
   let c = p.customerId && cust(p.customerId);
   if (!c && p.leadId && byId('leads', p.leadId)?.customerId) c = cust(byId('leads', p.leadId).customerId);
   if (!c) {
-    c = { id: uid(), createdAt: today(), name: p.name || p.address || 'New customer', phone: p.phone || '', email: '', address: p.address || '', source: 'Door knocking', notes: p.notes || '' };
+    const rep = (p.history || []).find(h => h.status === 'sale' || h.status === 'quote')?.rep || p.history?.at(-1)?.rep || me()?.name || '';
+    c = { id: uid(), createdAt: today(), name: p.name || p.address || 'New customer', phone: p.phone || '', email: '', address: p.address || '', source: 'Door knocking', notes: p.notes || '', salesRep: rep };
     db.customers.push(c); toast(`${c.name} added to customers`);
   }
   p.customerId = c.id;
@@ -2373,6 +2393,144 @@ document.addEventListener('visibilitychange', () => {
   if (name === 'customers' && id) { const c = cust(id); if (c?.stripeId) syncStripeCards(c).then(n => n && render()).catch(() => {}); }
   if (name === 'invoices' && id) { const inv = byId('invoices', id); if (inv) checkPayLink(inv, true).then(paid => paid && (render(), toast('Paid online ✓'))); }
 });
+
+/* =====================================================================
+ * Commissions: cleaner % per job, sales rep % per sale
+ * ===================================================================== */
+/** Default % for a person: their own setting, else the business default (owners get 0). */
+function pctFor(name, kind) {
+  if (!name) return 0;
+  const m = memberByName(name), own = kind === 'cleaner' ? m?.cleanerPct : m?.salesPct;
+  if (own !== undefined && own !== null && own !== '') return +own;
+  if (m?.role === 'Owner') return 0;
+  return +(kind === 'cleaner' ? db.settings.cleanerPct : db.settings.salesPct) || 0;
+}
+/** Commission base is the job's price before tax (after any discount). */
+const jobBase = j => { const inv = j.invoiceId && byId('invoices', j.invoiceId); const t = totals(inv || j); return round2(t.sub - t.disc); };
+function jobPay(j, base = jobBase(j)) {
+  const cPct = j.assignedTo ? (j.cleanerPct ?? pctFor(j.assignedTo, 'cleaner')) : 0;
+  const sPct = j.salesRep ? (j.salesPct ?? pctFor(j.salesRep, 'sales')) : 0;
+  const cleaner = round2(base * cPct / 100), sales = round2(base * sPct / 100);
+  return { base, cPct: +cPct, sPct: +sPct, cleaner, sales, keep: round2(base - cleaner - sales) };
+}
+/** Commissions earned on completed jobs in a date range, not yet paid out. */
+function commissionsOwed(from, to) {
+  let n = 0;
+  for (const j of db.jobs) {
+    if (j.status !== 'completed' || !inRange(j.completedAt || j.date, from, to)) continue;
+    const p = jobPay(j);
+    if (!j.cleanerPaid) n += p.cleaner;
+    if (!j.salesPaid) n += p.sales;
+  }
+  return round2(n);
+}
+function memberSelect(name, value, emptyLabel) {
+  const names = db.team.map(m => m.name);
+  if (!names.length) return inp(name, value, `placeholder="Name" list="teamList2"`) + `<datalist id="teamList2">${teamMembers().map(n => `<option value="${esc(n)}">`).join('')}</datalist>`;
+  const extra = value && !names.includes(value) ? [value] : [];
+  return `<select name="${name}">${opts([['', emptyLabel], ...[...names, ...extra].map(n => [n, n])], value || '')}</select>`;
+}
+/** "Pay & commission" block for the job form, with a live breakdown. */
+function payFieldsHTML(j) {
+  return `<div class="form-section"><h3>Pay &amp; commission</h3><div class="form-grid">
+    ${field('Cleaner commission %', `<div class="pct-input">${inp('cleanerPct', j.cleanerPct ?? pctFor(j.assignedTo, 'cleaner'), 'type="number" min="0" max="100" step="0.5" inputmode="decimal"')}<span>%</span></div>`)}
+    <div></div>
+    ${field('Sold by (sales rep)', memberSelect('salesRep', j.salesRep, 'No sales rep'))}
+    ${field('Sales commission %', `<div class="pct-input">${inp('salesPct', j.salesPct ?? pctFor(j.salesRep, 'sales'), 'type="number" min="0" max="100" step="0.5" inputmode="decimal"')}<span>%</span></div>`)}
+  </div><div class="pay-sum js-pay-sum"></div></div>`;
+}
+function bindPayFields(f, getItems) {
+  const touched = { cleanerPct: false, salesPct: false };
+  const sum = $('.js-pay-sum', f);
+  const draw = () => {
+    const t = totals({ items: getItems(), discount: f.discount?.value, taxRate: f.taxRate?.value }), base = round2(t.sub - t.disc);
+    const p = jobPay({ assignedTo: f.assignedTo.value, salesRep: f.salesRep.value, cleanerPct: +f.cleanerPct.value || 0, salesPct: +f.salesPct.value || 0 }, base);
+    sum.innerHTML = base ? `<div class="pay-row"><span>Job price (before tax)</span><b>${money(base)}</b></div>
+      ${f.assignedTo.value ? `<div class="pay-row"><span>${esc(f.assignedTo.value)} (cleaner, ${p.cPct}%)</span><b>−${money(p.cleaner)}</b></div>` : '<div class="pay-row muted"><span>No cleaner assigned</span><span></span></div>'}
+      ${f.salesRep.value ? `<div class="pay-row"><span>${esc(f.salesRep.value)} (sales, ${p.sPct}%)</span><b>−${money(p.sales)}</b></div>` : ''}
+      <div class="pay-row keep"><span>You keep</span><b>${money(p.keep)}</b></div>` : '<p class="muted small" style="margin:0">Enter a price to see everyone’s cut.</p>';
+  };
+  f.cleanerPct.addEventListener('input', () => { touched.cleanerPct = true; });
+  f.salesPct.addEventListener('input', () => { touched.salesPct = true; });
+  f.assignedTo.addEventListener('change', () => { if (!touched.cleanerPct) f.cleanerPct.value = pctFor(f.assignedTo.value, 'cleaner'); draw(); });
+  f.salesRep.addEventListener('change', () => { if (!touched.salesPct) f.salesPct.value = pctFor(f.salesRep.value, 'sales'); draw(); });
+  f.addEventListener('input', draw); f.addEventListener('click', () => setTimeout(draw));
+  draw();
+}
+/** Sales rep for a new job: the customer's rep, on their first job (or every job if set). */
+function defaultSalesRep(customerId) {
+  const c = cust(customerId); if (!c?.salesRep) return '';
+  if (db.settings.salesScope === 'every') return c.salesRep;
+  return db.jobs.some(j => j.customerId === customerId && j.salesRep) ? '' : c.salesRep;
+}
+
+/* ---------- Commissions tab (Team & time) ---------- */
+const PAY_PERIODS = { this_week: 'This week', last_week: 'Last week', this_month: 'This month', last_month: 'Last month' };
+function payRange(key) {
+  const ws = addDays(today(), -parseD(today()).getDay());
+  if (key === 'this_week') return [ws, addDays(ws, 6)];
+  if (key === 'last_week') return [addDays(ws, -7), addDays(ws, -1)];
+  return periodRange(key);
+}
+function commissionsHTML(tabs) {
+  const per = filt('team', 'payPeriod', 'this_week'), [from, to] = payRange(per);
+  const jobs = db.jobs.filter(j => j.status === 'completed' && inRange(j.completedAt || j.date, from, to)).sort((a, b) => (a.completedAt || a.date).localeCompare(b.completedAt || b.date));
+  const people = new Map();
+  const row = n => { if (!people.has(n)) people.set(n, { name: n, jobs: 0, clean: 0, sold: 0, sales: 0, owed: 0, paid: 0 }); return people.get(n); };
+  for (const j of jobs) {
+    const p = jobPay(j);
+    if (j.assignedTo && p.cleaner) { const r = row(j.assignedTo); r.jobs++; r.clean += p.cleaner; r[j.cleanerPaid ? 'paid' : 'owed'] += p.cleaner; }
+    if (j.salesRep && p.sales) { const r = row(j.salesRep); r.sold++; r.sales += p.sales; r[j.salesPaid ? 'paid' : 'owed'] += p.sales; }
+  }
+  const hourly = m => round2(sum(db.timeEntries.filter(t => t.memberId === m.id && t.out && inRange(localDate(t.in), from, to)), hoursOf) * (+m.rate || 0));
+  db.team.forEach(m => { const h = hourly(m); if (h) row(m.name).hourly = h; });
+  const rows = [...people.values()].sort((a, b) => b.owed + b.paid - a.owed - a.paid);
+  const totalKeep = sum(jobs, j => jobPay(j).keep), totalBase = sum(jobs, j => jobPay(j).base);
+  return head('Team & time', btn('Commission rates', 'payDefaults', '', '', 'settings'), 'What everyone earned, and what you keep.') + `<div class="card">${tabs}
+    <div class="toolbar"><select data-filter="team:payPeriod" style="width:auto" aria-label="Period">${opts(Object.entries(PAY_PERIODS), per)}</select>
+      <span class="muted small">${fmtDateShort(from)} – ${fmtDateShort(to)} · ${jobs.length} completed job${jobs.length === 1 ? '' : 's'}</span></div>
+    <div class="grid grid-3 pay-tiles" style="gap:10px;margin-bottom:14px">
+      <div class="knock-tile"><div><div class="muted small">Jobs (before tax)</div><div class="value">${money(totalBase)}</div></div></div>
+      <div class="knock-tile"><div><div class="muted small">Commissions</div><div class="value">${money(sum(rows, r => r.clean + r.sales))}</div><div class="muted small">${money(sum(rows, r => r.owed))} still to pay</div></div></div>
+      <div class="knock-tile"><div><div class="muted small">You keep</div><div class="value" style="color:var(--good)">${money(totalKeep)}</div><div class="muted small">before expenses</div></div></div>
+    </div>
+    ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Person</th><th class="num">Cleaning</th><th class="num">Sales</th><th class="num">Hourly</th><th class="num">Owed</th><th></th></tr></thead><tbody>
+      ${rows.map(r => `<tr><td><b>${esc(r.name)}</b><div class="muted small">${r.jobs ? `${r.jobs} job${r.jobs > 1 ? 's' : ''} cleaned` : ''}${r.jobs && r.sold ? ' · ' : ''}${r.sold ? `${r.sold} sold` : ''}</div></td>
+        <td class="num">${r.clean ? money(r.clean) : '—'}</td><td class="num">${r.sales ? money(r.sales) : '—'}</td><td class="num">${r.hourly ? money(r.hourly) : '—'}</td>
+        <td class="num"><b>${money(r.owed)}</b>${r.paid ? `<div class="muted small">${money(r.paid)} paid</div>` : ''}</td>
+        <td>${r.owed ? btn('Mark paid', 'payCommission', 'btn-sm', `data-name="${esc(r.name)}"`) : '<span class="badge good">Paid</span>'}</td></tr>`).join('')}
+    </tbody></table></div>` : empty('expense', 'No commissions for this period. Assign a cleaner and sales rep on your jobs to see pay here.')}
+    ${jobs.length ? `<h3 class="group-label" style="margin-top:16px">Jobs</h3>${jobs.map(j => { const p = jobPay(j); return `<a class="list-item" href="#/jobs/${j.id}" style="color:inherit">
+      <div class="grow"><div class="title">${esc(j.title)} <span class="muted small">· ${esc(custName(j.customerId))}</span></div>
+      <div class="muted small">${fmtDateShort(j.completedAt || j.date)} · ${money(p.base)}${j.assignedTo ? ` · ${esc(j.assignedTo)} ${money(p.cleaner)}${j.cleanerPaid ? ' ✓' : ''}` : ''}${j.salesRep ? ` · ${esc(j.salesRep)} ${money(p.sales)}${j.salesPaid ? ' ✓' : ''}` : ''}</div></div>
+      <div class="right"><b class="num">${money(p.keep)}</b><div class="muted small">you keep</div></div></a>`; }).join('')}` : ''}
+  </div>`;
+}
+function payDefaultsForm() {
+  const s = db.settings;
+  modal({ title: 'Commission rates', body: `<div class="form-grid">
+    ${field('Default cleaner commission %', `<div class="pct-input">${inp('cleanerPct', s.cleanerPct, 'type="number" min="0" max="100" step="0.5"')}<span>%</span></div>`)}
+    ${field('Default sales commission %', `<div class="pct-input">${inp('salesPct', s.salesPct, 'type="number" min="0" max="100" step="0.5"')}<span>%</span></div>`)}
+    ${field('Sales reps earn commission on', `<select name="salesScope">${opts([['first', 'The first job for a customer they sold'], ['every', 'Every job for customers they sold']], s.salesScope)}</select>`, 'full')}
+  </div><p class="muted small">You can set a different rate for any person in Team &amp; time (tap their card), and change it on any single job.</p>`,
+    onSubmit: (f, d) => { Object.assign(s, { cleanerPct: +d.cleanerPct || 0, salesPct: +d.salesPct || 0, salesScope: d.salesScope }); refresh(); toast('Commission rates saved'); } });
+}
+function payCommission(name) {
+  const per = filt('team', 'payPeriod', 'this_week'), [from, to] = payRange(per);
+  const jobs = db.jobs.filter(j => j.status === 'completed' && inRange(j.completedAt || j.date, from, to));
+  let amount = 0; const cl = [], sl = [];
+  for (const j of jobs) {
+    const p = jobPay(j);
+    if (j.assignedTo === name && !j.cleanerPaid && p.cleaner) { amount += p.cleaner; cl.push(j); }
+    if (j.salesRep === name && !j.salesPaid && p.sales) { amount += p.sales; sl.push(j); }
+  }
+  amount = round2(amount);
+  if (!amount || !confirm(`Mark ${money(amount)} as paid to ${name}? It’s added to your expenses under Wages & Payroll.`)) return;
+  cl.forEach(j => { j.cleanerPaid = today(); }); sl.forEach(j => { j.salesPaid = today(); });
+  db.expenses.push({ id: uid(), date: today(), amount, vendor: name, category: db.categories.includes('Wages & Payroll') ? 'Wages & Payroll' : db.categories[0], method: 'e-Transfer', tax: 0,
+    notes: `Commission ${PAY_PERIODS[per].toLowerCase()} (${cl.length} cleaned, ${sl.length} sold)`, isCommission: true });
+  refresh(); toast(`${money(amount)} paid to ${name}`);
+}
 
 /* ---------- Customers ---------- */
 VIEWS.customers = id => {
@@ -2686,7 +2844,8 @@ VIEWS.reports = () => {
   const [from, to] = periodRange(p, state.filters.reports);
   const incList = incomeEntries().filter(x => inRange(x.date, from, to));
   const expList = db.expenses.filter(e => inRange(e.date, from, to));
-  const inc = sum(incList, x => x.amount), exp = sum(expList, e => e.amount);
+  const owedComm = commissionsOwed(from, to);
+  const inc = sum(incList, x => x.amount), exp = round2(sum(expList, e => e.amount) + owedComm);
   const invs = db.invoices.filter(i => !i.void && invStatus(i) !== 'draft' && inRange(i.date, from, to));
   const taxCharged = sum(invs, i => totals(i).tax), taxPaid = sum(expList, e => e.tax);
   const billed = sum(invs, i => totals(i).total);
@@ -2730,6 +2889,7 @@ VIEWS.reports = () => {
         <tr><td><b>Income</b></td><td class="num"><b>${money(inc)}</b></td></tr>
         <tr><td class="muted">Less ${esc(s.taxName)} collected (est.)</td><td class="num muted">−${money(inc && billed ? taxCharged * Math.min(1, inc / billed) : 0)}</td></tr>
         ${catRows.map(r => `<tr><td style="padding-left:18px">${esc(r.label)}</td><td class="num">−${money(r.value)}</td></tr>`).join('')}
+        ${owedComm ? `<tr><td style="padding-left:18px">Commissions owed (not paid yet)</td><td class="num">−${money(owedComm)}</td></tr>` : ''}
         <tr><td><b>Total expenses</b></td><td class="num"><b>${money(exp)}</b></td></tr>
         <tr><td><b>Net profit (before tax)</b></td><td class="num"><b>${money(inc - exp - (inc && billed ? taxCharged * Math.min(1, inc / billed) : 0))}</b></td></tr>
         ${dist ? `<tr><td class="muted">Mileage deduction (${dist.toLocaleString()} ${esc(s.distanceUnit)})</td><td class="num muted">${money(dist * s.mileageRate)}</td></tr>` : ''}
@@ -2946,6 +3106,7 @@ function customerForm(c, onSaved) {
     ${field('Address', addrInput('address', c.address), 'full')}
     ${field('Tags', inp('tags', c.tags, 'placeholder="e.g. residential, referral"'))}
     ${field('How they found you', `<select name="source">${opts(LEAD_SOURCES.map(x => [x, x || '—']), c.source || '')}</select>`)}
+    ${field('Sold by (sales rep)', memberSelect('salesRep', c.salesRep, '—'))}
     ${field('Notes', `<textarea name="notes" placeholder="Gate code, pets, preferences…">${esc(c.notes)}</textarea>`, 'full')}</div>`,
     onSubmit: (f, d) => {
       if (isNew) {
@@ -3024,6 +3185,7 @@ function bindJobPrice(f, j) {
   const priceEl = f.jobPrice, hint = $('.js-price-hint', f), rows = () => $$('.js-items tr', f);
   let autoDesc = '';
   const sync = () => {
+    if (!j._getItems) return; // form already saved
     const items = j._getItems(), r = rows();
     const simple = r.length <= 1 && (items.length === 0 || (items.length === 1 && +items[0].qty === 1));
     priceEl.disabled = !simple;
@@ -3050,6 +3212,7 @@ function bindJobPrice(f, j) {
 }
 function jobForm(j, preset = {}) {
   const isNew = !j; j ||= { status: 'scheduled', date: preset.date || today(), ...preset };
+  if (isNew && j.salesRep === undefined && j.customerId) j.salesRep = defaultSalesRep(j.customerId);
   const c = cust(j.customerId);
   const later = !isNew && j.seriesId ? laterInSeries(j) : [];
   modal({ title: isNew ? 'New job' : 'Edit job', wide: true, body: `
@@ -3067,12 +3230,17 @@ function jobForm(j, preset = {}) {
     ${isNew ? repeatFieldsHTML() : ''}
     ${later.length ? `<label class="check full"><input type="checkbox" name="applySeries"> Also apply changes to the ${later.length} later visit(s) in this series (dates stay the same)</label>` : ''}
   </div></div>
+  ${payFieldsHTML(j)}
   <div class="form-section">${field('Notes / instructions', `<textarea name="notes" placeholder="Gate code, scope of work, materials to bring…">${esc(j.notes)}</textarea>`)}</div>
   <details class="form-section" ${(j.items || []).length ? 'open' : ''}><summary><h3>Line items <span class="muted small">(optional, used when you invoice)</span></h3></summary>${itemsEditorHTML(j)}</details>`,
     onMount: f => {
       j._getItems = mountItemsEditor(f, j);
       bindJobPrice(f, j);
-      bindCustomerSelect(f, nc => { if (nc && !f.address.value) f.address.value = nc.address || ''; });
+      bindPayFields(f, () => j._getItems?.() || []);
+      bindCustomerSelect(f, nc => {
+        if (nc && !f.address.value) f.address.value = nc.address || '';
+        if (nc && isNew && !f.salesRep.value) { const rep = defaultSalesRep(nc.id); if (rep) { if (f.salesRep.tagName === 'SELECT' && ![...f.salesRep.options].some(o => o.value === rep)) f.salesRep.add(new Option(rep, rep)); f.salesRep.value = rep; f.salesRep.dispatchEvent(new Event('change')); } }
+      });
       if (isNew && j.repeat) f.repeat.value = j.repeat;
       if (isNew) bindRepeat(f, () => f.date.value);
     },
@@ -3082,7 +3250,8 @@ function jobForm(j, preset = {}) {
       if (rule && !d.date) { toast('Pick a start date for a repeating job'); return false; }
       delete j._getItems;
       const base = { customerId: d.customerId, title: d.title.trim(), date: d.date, start: d.start, end: d.end, address: d.address,
-        assignedTo: d.assignedTo, status: d.status || j.status || 'scheduled', notes: d.notes, items, discount: +d.discount || 0, taxRate: d.taxRate === '' ? db.settings.taxRate : +d.taxRate };
+        assignedTo: d.assignedTo, status: d.status || j.status || 'scheduled', notes: d.notes, items, discount: +d.discount || 0, taxRate: d.taxRate === '' ? db.settings.taxRate : +d.taxRate,
+        salesRep: d.salesRep || '', cleanerPct: d.cleanerPct === '' ? null : +d.cleanerPct, salesPct: d.salesPct === '' ? null : +d.salesPct };
       if (!isNew) {
         const apply = d.applySeries ? later : [];
         Object.assign(j, base);
@@ -3437,6 +3606,8 @@ const ACTIONS = {
     const snap = snapshot(), ids = new Set(p.future.map(j => j.id));
     db.jobs = db.jobs.filter(j => !ids.has(j.id)); refresh(); undoToast(snap, 'Plan stopped');
   },
+  payDefaults: () => payDefaultsForm(),
+  payCommission: ds => payCommission(ds.name),
   newMember: () => memberForm(), editMember: ds => memberForm(byId('team', ds.id)),
   myClock: ds => {
     const m = me(); if (!m) return chooseMe(() => ACTIONS.myClock(ds));
@@ -3569,6 +3740,14 @@ const ACTIONS = {
   calToday: () => { state.calMonth = today().slice(0, 7); state.calDay = today(); render(); },
   calView: ds => { state.calView = ds.v; state.calMonth = state.calDay.slice(0, 7); render(); },
   openMenu: () => {
+    if (isPhone()) {
+      const cur = location.hash.split('/')[1] || 'dashboard';
+      const groups = [{ label: '', items: [] }];
+      NAV.forEach(([k, l, ic]) => (k === 'label' ? groups.push({ label: l, items: [] }) : groups.at(-1).items.push([k, l, ic])));
+      modal({ title: 'All sections', noFoot: true, focus: false, body: groups.map(gr => `<h3 class="group-label">${esc(gr.label)}</h3>
+        <div class="app-grid">${gr.items.map(([k, l, ic]) => `<a class="app-tile ${k === cur ? 'active' : ''}" href="#/${k}"><span class="app-tile-ic">${icon(ic)}</span><span>${esc(l)}</span></a>`).join('')}</div>`).join('') });
+      return;
+    }
     $('#sidebar').classList.add('open');
     const scrim = document.createElement('div'); scrim.className = 'scrim';
     scrim.onclick = () => { $('#sidebar').classList.remove('open'); scrim.remove(); };
@@ -3576,6 +3755,7 @@ const ACTIONS = {
   },
   openSearch: () => openSearch(),
   hideSetup: () => { db.settings.hideSetup = true; refresh(); },
+  hideInstall: () => { db.settings.hideInstall = true; refresh(); },
   newLead: () => leadForm(), editLead: ds => leadForm(byId('leads', ds.id)),
   toggleClosedLeads: () => { state.filters.leads ||= {}; state.filters.leads.closed = state.filters.leads.closed === '1' ? '' : '1'; render(); },
   newTask: ds => taskForm(null, ds.cust ? { customerId: ds.cust } : {}), editTask: ds => taskForm(byId('tasks', ds.id)),
@@ -3883,7 +4063,11 @@ function loadSample() {
   custs.forEach((c, i) => { c.source = ['Referral', 'Google', 'Facebook / Instagram', 'Repeat customer', 'Door knocking'][i % 5]; });
   if (!db.team.length) {
     db.team.push({ id: uid(), name: 'Alex', role: 'Owner', color: TEAM_COLORS[0], phone: '', email: '', rate: 0 },
-      { id: uid(), name: 'Mike', role: 'Technician', color: TEAM_COLORS[1], phone: '', email: '', rate: 24 });
+      { id: uid(), name: 'Mike', role: 'Technician', color: TEAM_COLORS[1], phone: '', email: '', rate: 24 },
+      { id: uid(), name: 'Jordan', role: 'Sales', color: TEAM_COLORS[2], phone: '', email: '', rate: 0, salesPct: 25 });
+    custs.slice(0, 4).forEach(c => { c.salesRep = 'Jordan'; });
+    for (const c of custs.slice(0, 4)) { const first = db.jobs.filter(j => j.customerId === c.id).sort((a, b) => a.date.localeCompare(b.date))[0]; if (first) first.salesRep = 'Jordan'; }
+    db.jobs.filter(j => j.status === 'completed' && j.date < addDays(t, -14)).forEach(j => { j.cleanerPaid = j.date; if (j.salesRep) j.salesPaid = j.date; });
     const mike = db.team[1];
     for (let k = -6; k < 0; k++) { const d = addDays(t, k); if (parseD(d).getDay() % 6) db.timeEntries.push({ id: uid(), memberId: mike.id, in: `${d}T08:0${k + 7}`, out: `${d}T16:3${k + 7}`, breakMin: 30, approved: k < -3 }); }
   }
@@ -3927,7 +4111,16 @@ function loadSample() {
 /* =====================================================================
  * Boot
  * ===================================================================== */
-window.addEventListener('hashchange', () => { $('#modalRoot').innerHTML = ''; render(); window.scrollTo(0, 0); });
+window.addEventListener('hashchange', () => {
+  $('#modalRoot').innerHTML = ''; render(); window.scrollTo(0, 0);
+  const m = $('#main'); m.classList.remove('page-enter'); void m.offsetWidth; m.classList.add('page-enter');
+});
+$('#backBtn').addEventListener('click', () => {
+  const [, name] = location.hash.split('/');
+  if (history.length > 1) history.back(); else go('#/' + (name || 'dashboard'));
+});
+new MutationObserver(() => document.body.classList.toggle('modal-open', $('#modalRoot').children.length > 0)).observe($('#modalRoot'), { childList: true });
+if (navigator.standalone || matchMedia('(display-mode: standalone)').matches) document.documentElement.classList.add('standalone');
 try { Object.assign(state, JSON.parse(localStorage.getItem('bizhub.ui') || '{}')); } catch { /* ignore */ }
 state.calDay = today(); state.calMonth = today().slice(0, 7); state.tsWeek = '';
 window.addEventListener('pagehide', () => { try { localStorage.setItem('bizhub.ui', JSON.stringify({ calView: state.calView, calTeam: state.calTeam, filters: state.filters, mapStyle: state.mapStyle })); } catch { /* ignore */ } });

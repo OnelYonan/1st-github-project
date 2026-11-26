@@ -744,3 +744,188 @@ a.card.stat:hover { border-color: var(--primary); }
 .stripe-status { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-size: .9rem; }
 .setup-steps { padding-left: 20px; display: flex; flex-direction: column; gap: 6px; margin: 8px 0 0; }
 .link-btn.small { font-size: .82rem; }
+
+/* =====================================================================
+ * v8: iPhone / app feel
+ * ===================================================================== */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; background: var(--bg); }
+body { -webkit-tap-highlight-color: transparent; overflow-x: clip; }
+a, button, .btn, input, select, textarea, label { touch-action: manipulation; }
+.btn, .nav a, .bottom-nav a, .bottom-nav button, .chip-btn, .menu-item, .tabs button, .seg button, .app-tile { -webkit-user-select: none; user-select: none; }
+.menu-cancel { display: none; }
+#backBtn[hidden] { display: none !important; }
+.main.page-enter > :not(.fab) { animation: pageIn .18s ease-out; }
+@keyframes pageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .main.page-enter > *, .modal, .menu-wrap.open .menu { animation: none !important; } }
+.install-tip { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.install-tip img { border-radius: 10px; flex-shrink: 0; }
+.share-ic svg { width: 15px; height: 15px; vertical-align: -2px; color: var(--primary); }
+.app-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-bottom: 6px; }
+.app-tile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 2px; border-radius: 14px; color: var(--text); font-size: .74rem; font-weight: 600; text-align: center; line-height: 1.2; }
+.app-tile-ic { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: var(--primary-soft); color: var(--primary); }
+.app-tile-ic svg { width: 24px; height: 24px; }
+.app-tile.active .app-tile-ic { background: var(--primary); color: #fff; }
+.app-tile:active { background: var(--surface-2); }
+
+@media (max-width: 760px) {
+  /* 16px text in fields stops iPhone zooming in when you tap them */
+  input, select, textarea { font-size: 16px; }
+  .items-table input, .addon-row input, .addon-row select, .quick-task input { font-size: 16px; }
+
+  /* comfortable tap targets + press feedback */
+  .btn { min-height: 44px; }
+  .btn-sm { min-height: 38px; padding: 6px 12px; }
+  .btn-icon { min-height: 40px; min-width: 40px; }
+  .btn:active, .list-item:active, .attn-row:active, .plan-row:active, .lead-card:active, .chip-btn:active, .card.stat:active, .agenda-item:active, .wk-job:active { transform: scale(.98); opacity: .85; }
+  .btn, .list-item, .attn-row, .plan-row, .lead-card, .chip-btn { transition: transform .08s, opacity .08s; }
+
+  /* top bar: room for the notch, translucent like iOS */
+  .mobile-bar {
+    padding: calc(env(safe-area-inset-top) + 6px) max(10px, env(safe-area-inset-right)) 6px max(10px, env(safe-area-inset-left));
+    background: color-mix(in srgb, var(--surface) 88%, transparent); -webkit-backdrop-filter: saturate(180%) blur(16px); backdrop-filter: saturate(180%) blur(16px);
+    gap: 6px; min-height: 52px;
+  }
+  #menuBtn { display: none; }
+  .mobile-bar .brand { min-width: 0; gap: 8px; }
+  .mobile-bar .brand-logo { width: 30px; height: 30px; border-radius: 8px; font-size: .9rem; }
+  .mobile-bar .brand-name { font-size: 1rem; max-width: 42vw; }
+  #backBtn { margin-left: -6px; color: var(--primary); }
+  #backBtn svg { width: 26px; height: 26px; }
+  #mobileClock .clock-btn { min-height: 34px; }
+
+  /* page layout + safe areas (landscape notch) */
+  .main { padding: 14px max(16px, env(safe-area-inset-right)) calc(110px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+  .page-head { flex-direction: column; align-items: stretch; gap: 10px; margin-bottom: 14px; }
+  .page-head h1 { font-size: 1.45rem; }
+  .card { padding: 14px; border-radius: 14px; }
+  .table-wrap { margin: 0 -14px; padding: 0 14px; }
+
+  /* rows of buttons swipe sideways instead of falling off the screen */
+  .page-head .actions, .doc-actions {
+    flex-wrap: nowrap; overflow-x: auto; justify-content: flex-start; scrollbar-width: none;
+    margin: 0 -16px; padding: 2px 16px 6px; scroll-padding: 16px;
+  }
+  .page-head .actions::-webkit-scrollbar, .doc-actions::-webkit-scrollbar, .tabs::-webkit-scrollbar, .settings-nav::-webkit-scrollbar { display: none; }
+  .page-head .actions > *, .doc-actions > * { flex-shrink: 0; }
+  .doc-actions { margin-bottom: 12px; }
+  .tabs { scrollbar-width: none; margin-left: -14px; margin-right: -14px; padding: 0 14px; }
+
+  /* "More" menus become iOS-style action sheets */
+  .menu-wrap.open::before { content: ''; position: fixed; inset: 0; background: rgba(15, 23, 42, .45); z-index: 69; animation: fadeIn .15s; }
+  .menu-wrap.open .menu, .page-head .actions .menu-wrap:last-child.open .menu {
+    position: fixed; left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right)); top: auto;
+    bottom: calc(8px + env(safe-area-inset-bottom)); min-width: 0; max-height: 75dvh; overflow-y: auto; z-index: 70;
+    border-radius: 16px; padding: 6px; animation: sheetUp .22s cubic-bezier(.2, .8, .2, 1); box-shadow: 0 -8px 40px rgba(0,0,0,.25);
+  }
+  .menu-item { padding: 14px 12px; font-size: 1rem; border-radius: 10px; }
+  .menu-item svg { width: 20px; height: 20px; }
+  .menu-cancel { display: flex; justify-content: center; font-weight: 700; color: var(--primary); border-top: 1px solid var(--border); border-radius: 0; margin-top: 4px; }
+
+  /* forms open as full-screen sheets that slide up */
+  body.modal-open { overflow: hidden; }
+  .modal-backdrop { padding: calc(env(safe-area-inset-top) + 10px) 0 0; align-items: flex-end; overflow: hidden; animation: fadeIn .15s; }
+  .modal, .modal.wide {
+    width: 100%; max-height: calc(100dvh - env(safe-area-inset-top) - 10px); border: none; border-radius: 18px 18px 0 0;
+    display: flex; flex-direction: column; animation: sheetUp .25s cubic-bezier(.2, .8, .2, 1);
+  }
+  .modal-head { position: relative; padding: 18px 16px 12px; flex-shrink: 0; }
+  .modal-head::before { content: ''; position: absolute; top: 6px; left: 50%; width: 38px; height: 5px; margin-left: -19px; border-radius: 3px; background: var(--border); }
+  .modal-head h2 { font-size: 1.1rem; }
+  .modal-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 14px 16px 20px; }
+  .modal-foot { flex-shrink: 0; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); gap: 8px; background: var(--surface); }
+  .modal-foot .spacer { display: none; }
+  .modal-foot .btn { flex: 1 1 0; min-height: 48px; font-size: 1rem; }
+  .modal-foot .btn-danger { flex: 0 0 auto; }
+  .modal .form-grid { gap: 12px; }
+  .search-results { max-height: none; }
+
+  /* line items: stacked cards instead of a squeezed table */
+  .items-table, .items-table tbody { display: block; width: 100%; }
+  .items-table thead { display: none; }
+  .items-table tr {
+    display: grid; grid-template-columns: 76px minmax(0, 1fr) 52px; grid-template-areas: "desc desc ctl" "qty price tax" "amt amt amt";
+    gap: 8px; padding: 12px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2);
+  }
+  .items-table td { display: block; padding: 0; border: none; }
+  .items-table td:nth-child(1) { grid-area: desc; }
+  .items-table td:nth-child(2) { grid-area: qty; }
+  .items-table td:nth-child(3) { grid-area: price; }
+  .items-table td:nth-child(4) { grid-area: tax; text-align: center; }
+  .items-table td:nth-child(5) { grid-area: amt; text-align: right; font-weight: 700; }
+  .items-table td:nth-child(6) { grid-area: ctl; display: flex; justify-content: flex-end; align-items: flex-start; gap: 2px; }
+  .items-table td:nth-child(2)::before, .items-table td:nth-child(3)::before, .items-table td:nth-child(4)::before {
+    display: block; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin-bottom: 3px;
+  }
+  .items-table td:nth-child(2)::before { content: 'Qty'; }
+  .items-table td:nth-child(3)::before { content: 'Price'; }
+  .items-table td:nth-child(4)::before { content: 'Tax'; }
+  .items-table td:nth-child(5)::before { content: 'Amount  '; font-weight: 500; color: var(--text-2); white-space: pre; }
+  .items-table .qty, .items-table .price { width: 100%; }
+  .items-table td.tx input { width: 24px; height: 24px; margin-top: 8px; }
+  .items-table .details { margin-top: 6px; }
+  .modal .table-wrap { margin: 0; padding: 0; overflow: visible; }
+  .totals { width: 100%; }
+
+  /* documents (invoice, quote, agreement) fit the phone */
+  .doc { padding: 18px 16px; font-size: 13px; border-radius: 14px; }
+  .doc .doc-top { flex-direction: column; gap: 14px; }
+  .doc h1 { text-align: left; font-size: 22px; }
+  .doc .meta { text-align: left; }
+  .doc .meta div { justify-content: flex-start; }
+  .doc table th, .doc table td { padding: 8px 4px; }
+  .doc table th:nth-child(2), .doc table td:nth-child(2) { width: 34px; }
+  .doc-logo { max-width: 140px; }
+
+  /* bottom tab bar: translucent, clear of the home indicator */
+  .bottom-nav {
+    background: color-mix(in srgb, var(--surface) 90%, transparent); -webkit-backdrop-filter: saturate(180%) blur(16px); backdrop-filter: saturate(180%) blur(16px);
+    padding: 4px max(6px, env(safe-area-inset-right)) calc(4px + env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
+  }
+  .bottom-nav a, .bottom-nav button { min-height: 50px; }
+  .bottom-nav .active svg { stroke-width: 2.4; }
+  .fab { right: max(16px, env(safe-area-inset-right)); width: 54px; height: 54px; }
+  body.modal-open .fab { display: none; }
+
+  /* misc: horizontal boards snap, sticky things behave */
+  .kanban { scroll-snap-type: x mandatory; margin: 0 -16px; padding: 0 16px 8px; scroll-padding: 16px; }
+  .kanban-col { scroll-snap-align: start; }
+  .settings-nav { margin: 0 -16px; padding: 0 16px 6px; scrollbar-width: none; }
+  .map { height: calc(100dvh - 330px - env(safe-area-inset-bottom)); }
+  .toast { bottom: calc(80px + env(safe-area-inset-bottom)); max-width: calc(100% - 32px); }
+  .cal-head { gap: 8px; }
+  .cal-head .row { flex: 1; justify-content: space-between; }
+  .cal-title { min-width: 0; font-size: .95rem; }
+  .dash-grid { gap: 14px; }
+  .doc-callout { font-size: 12.5px; }
+  .grid-4 .stat .label { font-size: .78rem; }
+}
+/* Installed app (opened from the Home Screen) */
+html.standalone body { overscroll-behavior-y: none; }
+@media (max-width: 760px) {
+  .page-head .actions, .doc-actions { width: calc(100% + 32px); max-width: none; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent); }
+  .page-head .actions:has(.menu-wrap.open), .doc-actions:has(.menu-wrap.open) { -webkit-mask-image: none; mask-image: none; }
+}
+@media (max-width: 760px) {
+  .page-head .actions, .doc-actions { -webkit-mask-image: none; mask-image: none; padding-right: 0; }
+  .page-head .actions > .menu-wrap:last-child, .doc-actions > .menu-wrap:last-child {
+    position: sticky; right: 0; z-index: 2; margin-left: auto; padding: 0 16px 0 14px;
+    background: linear-gradient(to right, transparent, var(--bg) 14px);
+  }
+}
+
+/* ============ v9: commissions ============ */
+.pct-input { display: flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.pct-input:focus-within { outline: 2px solid var(--primary); outline-offset: -1px; }
+.pct-input input { border: none; outline: none !important; }
+.pct-input span { padding: 0 12px 0 4px; color: var(--text-2); font-weight: 600; }
+.pay-sum { margin-top: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; font-size: .92rem; }
+.pay-row { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; font-variant-numeric: tabular-nums; }
+.pay-row.keep { border-top: 1px solid var(--border); margin-top: 4px; padding-top: 8px; font-size: 1rem; }
+.pay-row.keep b { color: var(--good); }
+@media (max-width: 760px) {
+  .pay-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; gap: 6px !important; }
+  .pay-tiles .knock-tile { padding: 10px 8px; }
+  .pay-tiles .value { font-size: 1.05rem; }
+}
