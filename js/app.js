@@ -99,6 +99,8 @@ const DEFAULT_SETTINGS = {
   quoteNotes: 'This quote is valid for 30 days. Prices include labour and materials listed above.',
   mileageRate: 0.72, distanceUnit: 'km', theme: 'auto',
   paymentLink: '', reviewLink: '', monthlyGoal: 0, lastBackup: '',
+  planPrefix: 'SP-', nextPlanNo: 1001, planTermMonths: 12, planMinVisits: 2, cancelFee: 50, planTerms: '',
+  processor: '', processorUrl: '', cardSetupLink: '', meId: '',
   tplInvoice: 'Hi {first}, here is invoice {number} from {business} for {total}, due {due}.\n\n{items}\n\n{pay}\n\nThank you!\n{signature}',
   tplReminder: 'Hi {first}, a friendly reminder that invoice {number} for {balance} was due {due}.\n\n{pay}\n\nIf you have already paid, please ignore this message. Thank you!\n{signature}',
   tplQuote: 'Hi {first}, thanks for the opportunity! Here is quote {number} from {business} for {total}, valid until {valid}.\n\n{items}\n\nJust reply to let me know if you would like to go ahead and we will get you booked in.\n{signature}',
@@ -117,12 +119,12 @@ const PAY_METHODS = ['e-Transfer', 'Cash', 'Cheque', 'Credit card', 'Debit', 'Ba
 
 function blank() {
   return { settings: { ...DEFAULT_SETTINGS }, categories: [...DEFAULT_CATEGORIES], customers: [], services: [], jobs: [],
-    quotes: [], invoices: [], expenses: [], incomes: [], mileage: [], leads: [], tasks: [], team: [], timeEntries: [] };
+    quotes: [], invoices: [], expenses: [], incomes: [], mileage: [], leads: [], tasks: [], team: [], timeEntries: [], subscriptions: [], planTemplates: [], pins: [] };
 }
 function normalize(d) {
   const b = blank();
   const out = { ...b, ...d, settings: { ...b.settings, ...(d.settings || {}) } };
-  for (const k of ['customers', 'services', 'jobs', 'quotes', 'invoices', 'expenses', 'incomes', 'mileage', 'categories', 'leads', 'tasks', 'team', 'timeEntries'])
+  for (const k of ['customers', 'services', 'jobs', 'quotes', 'invoices', 'expenses', 'incomes', 'mileage', 'categories', 'leads', 'tasks', 'team', 'timeEntries', 'subscriptions', 'planTemplates', 'pins'])
     if (!Array.isArray(out[k])) out[k] = b[k];
   return out;
 }
@@ -287,7 +289,7 @@ function toast(msg, action) {
   toastTimer = setTimeout(() => el.remove(), action ? 7000 : 2800);
 }
 
-function modal({ title, body, wide = false, submitLabel = 'Save', onSubmit, onMount, footExtra = '', noFoot = false }) {
+function modal({ title, body, wide = false, submitLabel = 'Save', onSubmit, onMount, footExtra = '', noFoot = false, focus = true }) {
   const wrap = document.createElement('div');
   wrap.className = 'modal-backdrop';
   wrap.innerHTML = `<form class="modal ${wide ? 'wide' : ''}" autocomplete="off" role="dialog" aria-modal="true" aria-label="${esc(title)}">
@@ -309,9 +311,11 @@ function modal({ title, body, wide = false, submitLabel = 'Save', onSubmit, onMo
   });
   onMount?.(form, close);
   // Focus the first field, unless the person has already clicked into another one.
-  const first = $('input:not([type=hidden]):not([type=file]),select,textarea', form);
-  first?.focus();
-  setTimeout(() => { if (!form.contains(document.activeElement)) first?.focus(); }, 30);
+  const first = focus && $('input:not([type=hidden]):not([type=file]),select,textarea', form);
+  if (first) {
+    first.focus();
+    setTimeout(() => { if (!form.contains(document.activeElement)) first.focus(); }, 30);
+  }
   return { form, close };
 }
 document.addEventListener('keydown', e => {
@@ -666,12 +670,12 @@ document.addEventListener('mousemove', e => {
  * ===================================================================== */
 const NAV = [
   ['dashboard', 'Dashboard', 'home'],
-  ['label', 'Work'], ['schedule', 'Schedule', 'calendar'], ['jobs', 'Jobs', 'jobs'], ['plans', 'Recurring', 'repeat'], ['tasks', 'To-dos', 'todo'],
-  ['label', 'Sales'], ['leads', 'Leads', 'funnel'], ['customers', 'Customers', 'users'], ['quotes', 'Quotes', 'quote'], ['invoices', 'Invoices', 'invoice'],
+  ['label', 'Work'], ['schedule', 'Schedule', 'calendar'], ['jobs', 'Jobs', 'jobs'], ['tasks', 'To-dos', 'todo'],
+  ['label', 'Sales'], ['canvass', 'Door knocking', 'map'], ['leads', 'Leads', 'funnel'], ['customers', 'Customers', 'users'], ['quotes', 'Quotes', 'quote'], ['plans', 'Service plans', 'repeat'], ['invoices', 'Invoices', 'invoice'],
   ['label', 'Money'], ['income', 'Income', 'income'], ['expenses', 'Expenses', 'expense'], ['reports', 'Reports', 'reports'],
   ['label', 'Business'], ['team', 'Team & time', 'clock'], ['services', 'Price book', 'tag'], ['settings', 'Settings', 'settings'],
 ];
-const BOTTOM_NAV = [['dashboard', 'Home', 'home'], ['schedule', 'Schedule', 'calendar'], ['jobs', 'Jobs', 'jobs'], ['invoices', 'Invoices', 'invoice']];
+const BOTTOM_NAV = [['dashboard', 'Home', 'home'], ['schedule', 'Schedule', 'calendar'], ['canvass', 'Knock', 'map'], ['jobs', 'Jobs', 'jobs']];
 const state = { calMonth: today().slice(0, 7), calDay: today(), calView: 'month', calTeam: '', filters: {}, loaded: false };
 const filt = (view, key, def) => (state.filters[view] ||= {})[key] ?? def;
 
@@ -680,10 +684,12 @@ function renderChrome() {
   $$('.js-bizname').forEach(el => el.textContent = s.businessName || 'Business Hub');
   $$('.js-logo').forEach(el => el.innerHTML = s.logo ? `<img src="${s.logo}" alt="">` : esc((s.businessName || 'B')[0].toUpperCase()));
   let cur = (location.hash.split('/')[1] || 'dashboard');
+  if (cur === 'signed') cur = 'plans';
   if (cur === 'statement') cur = 'customers';
   const counts = { leads: db.leads.filter(l => l.stage === firstStage()).length,
-    tasks: db.tasks.filter(t => !t.done && t.due && t.due <= today()).length };
-  $('#nav').innerHTML = `<button class="search-btn" data-act="openSearch">${icon('search')}<span>Search</span><kbd>Ctrl K</kbd></button>` +
+    tasks: db.tasks.filter(t => !t.done && t.due && t.due <= today()).length, plans: db.subscriptions.filter(x => x.status === 'sent').length, canvass: comebacksDue().length };
+  $('#mobileClock').innerHTML = clockWidget();
+  $('#nav').innerHTML = `<button class="search-btn" data-act="openSearch">${icon('search')}<span>Search</span><kbd>Ctrl K</kbd></button>${clockWidget()}` +
     NAV.map(([k, l, ic]) => k === 'label' ? `<div class="nav-label">${l}</div>` :
     `<a href="#/${k}" class="${cur === k ? 'active' : ''}">${icon(ic)}<span>${l}</span>${counts[k] ? `<span class="count">${counts[k]}</span>` : ''}</a>`).join('');
   $('#bottomNav').innerHTML = BOTTOM_NAV.map(([k, l, ic]) => `<a href="#/${k}" class="${cur === k ? 'active' : ''}">${icon(ic)}<span>${l}</span></a>`).join('') +
@@ -695,16 +701,18 @@ function renderChrome() {
 function render() {
   if (!state.loaded) return;
   const [, name = 'dashboard', id] = (location.hash || '#/dashboard').split('/');
+  if (name === 'signed' && id) { renderChrome(); receiveSignature(id); return; }
   const view = VIEWS[name] || VIEWS.dashboard;
   renderChrome();
   $('#sidebar').classList.remove('open'); $('.scrim')?.remove();
   const html = view(id ? decodeURIComponent(id) : undefined);
   if (html !== undefined) $('#main').innerHTML = html + fab(name);
+  view.mount?.(id);
   document.title = (db.settings.businessName || 'Business Hub');
 }
 const fab = name => {
   const map = { dashboard: 'newJob', schedule: 'newJob', jobs: 'newJob', customers: 'newCustomer', quotes: 'newQuote',
-    invoices: 'newInvoice', expenses: 'newExpense', income: 'newIncome', services: 'newService', leads: 'newLead', tasks: 'newTask', plans: 'newJob', team: 'newMember' };
+    invoices: 'newInvoice', expenses: 'newExpense', income: 'newIncome', services: 'newService', leads: 'newLead', tasks: 'newTask', plans: 'newPlan', team: 'newMember' };
   return map[name] ? `<button class="fab no-print" data-act="${map[name]}" aria-label="Add">${icon('plus')}</button>` : '';
 };
 const go = h => { if (location.hash === h) render(); else location.hash = h; };
@@ -761,19 +769,32 @@ VIEWS.dashboard = () => {
       <div class="progress" style="margin-bottom:10px"><i style="width:${(4 - setupLeft) * 25}%"></i></div>
       ${setupSteps.map(([done, label, href]) => `<a class="setup-step ${done ? 'done' : ''}" href="${href}">${icon(done ? 'check' : 'plus')}<span>${label}</span></a>`).join('')}</div>` : '';
 
+  const knockDue = comebacksDue();
+  const kt = knockStats(t, t, ''), kw = knockStats(addDays(t, -parseD(t).getDay()), t, '');
+  const knockCard = db.pins.length ? `<a class="card knock-card" href="#/canvass" data-tabset="canvass:tab:stats" style="color:inherit"><div class="card-head"><h2>Door knocking</h2><span class="small" style="color:var(--primary)">Stats →</span></div>
+    <div class="knock-mini">${[['Doors', kt.doors, kw.doors], ['Sales', kt.sale, kw.sale], ['Quotes', kt.quote, kw.quote], ['Come-backs', kt.comeback, kw.comeback]]
+      .map(([l, a, b]) => `<div><b>${a}</b><span>${l} today</span><span class="muted">${b} this week</span></div>`).join('')}</div></a>` : '';
+  const awaitingSig = db.subscriptions.filter(x => x.status === 'sent' && x.sentAt && daysBetween(x.sentAt, t) >= 3);
+  const planCust = new Set(db.subscriptions.filter(x => x.status === 'active').map(x => x.customerId));
+  const expiringCards = [...planCust].filter(cid => (cust(cid)?.cards || []).length && !defaultCard(cid) || (cust(cid)?.cards || []).some(k => k.isDefault && cardState(k)));
+  const endingPlans = db.subscriptions.filter(x => x.status === 'active' && !x.autoRenew && inRange(planEnd(x), t, addDays(t, 30)));
   const attn = [
     overdue.length && ['bad', 'alert', `${plural(overdue.length, 'overdue invoice')}`, `${money(sum(overdue, balance))} owed. Send a reminder.`, '#/invoices', 'invoices:tab:overdue'],
     newLeads.length && ['info', 'funnel', `${plural(newLeads.length, 'new lead')}`, 'Waiting for you to get in touch', '#/leads'],
     uninvoiced.length && ['warn', 'invoice', `${plural(uninvoiced.length, 'job')} to invoice`, 'Completed but not billed yet', '#/jobs', 'jobs:tab:uninvoiced'],
     staleQuotes.length && ['info', 'quote', `${plural(staleQuotes.length, 'quote')} to follow up`, 'Sent 3+ days ago with no answer', '#/quotes'],
     lateJobs.length && ['warn', 'calendar', `${plural(lateJobs.length, 'past job')} still open`, 'Mark them complete or reschedule', '#/jobs', 'jobs:tab:late'],
+    awaitingSig.length && ['info', 'repeat', `${plural(awaitingSig.length, 'plan')} waiting for signature`, 'Sent 3+ days ago. Send a reminder.', '#/plans'],
+    expiringCards.length && ['warn', 'expense', `${plural(expiringCards.length, 'card')} expiring`, 'Customers on a plan need a new card', `#/customers/${expiringCards[0]}`],
+    endingPlans.length && ['warn', 'repeat', `${plural(endingPlans.length, 'plan')} ending soon`, 'Renew before the last visit', `#/plans/${endingPlans[0].id}`],
+    knockDue.length && ['warn', 'clock', `${plural(knockDue.length, 'come-back')} due`, 'Houses that asked you to come back', '#/canvass'],
     needsBackup && ['warn', 'download', 'Back up your data', s.lastBackup ? `Last backup ${fmtDate(s.lastBackup)}` : 'No backup yet. Tap to save one.', '', '', 'exportBackup'],
   ].filter(Boolean);
   const attnHTML = attn.map(([tone, ic, title, sub, href, tabset, act]) => {
     const inner = `<span class="attn-ic ${tone}">${icon(ic)}</span><span class="grow"><b>${title}</b><span class="muted small">${sub}</span></span><span class="chev">›</span>`;
     return act ? `<button class="attn-row" data-act="${act}">${inner}</button>` : `<a class="attn-row" href="${href}" ${tabset ? `data-tabset="${tabset}"` : ''}>${inner}</a>`;
   }).join('');
-  const onClock = db.team.filter(m => openEntry(m.id));
+  const onClock = [];
 
   const delta = incLast ? Math.round((inc - incLast) / incLast * 100) : null;
   const goal = +s.monthlyGoal || 0;
@@ -809,6 +830,8 @@ VIEWS.dashboard = () => {
         ${todoItems.length ? todoItems.join('') : '<p class="muted small" style="margin:8px 0 0">Nothing due. Nice work! 🎉</p>'}</div>
     </div>
     <div class="stack">
+      ${clockCard()}
+      ${knockCard}
       ${attn.length ? `<div class="card hide-sm"><div class="card-head"><h2>Needs attention</h2></div><div class="attn">${attnHTML}</div></div>` : ''}
       ${onClock.length ? `<div class="card"><div class="card-head"><h2>On the clock</h2><a href="#/team" class="small">Team →</a></div>
         ${onClock.map(m => `<div class="list-item"><span class="avatar sm" style="background:${m.color}">${esc(m.name[0])}</span><div class="grow"><b>${esc(m.name)}</b>
@@ -1010,12 +1033,14 @@ function jobDetail(id) {
         ${j.startedAt ? `<div><div class="muted small">Time on job</div>${fmtHours(worked)}${j.finishedAt ? '' : ' <span class="badge warn">running</span>'} <span class="muted small">(started ${fmtClock(j.startedAt)}${j.finishedAt ? ', finished ' + fmtClock(j.finishedAt) : ''})</span></div>` : ''}
         ${addr ? `<div><div class="muted small">Address</div><a target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addr)}">${esc(addr)} ↗</a></div>` : ''}
         ${j.assignedTo ? `<div><div class="muted small">Assigned to</div>${memberColor(j.assignedTo) ? `<span class="dot" style="background:${memberColor(j.assignedTo)}"></span>` : ''}${esc(j.assignedTo)}</div>` : ''}
+        ${j.planId && byId('subscriptions', j.planId) ? `<div><div class="muted small">Service plan</div><a href="#/plans/${j.planId}">${esc(byId('subscriptions', j.planId).number)} · ${esc(byId('subscriptions', j.planId).name)}</a></div>` : ''}
         ${j.quoteId && byId('quotes', j.quoteId) ? `<div><div class="muted small">From quote</div><a href="#/quotes/${j.quoteId}">${esc(byId('quotes', j.quoteId).number)}</a></div>` : ''}
         ${j.notes ? `<div><div class="muted small">Notes</div><div style="white-space:pre-wrap">${esc(j.notes)}</div></div>` : ''}
         ${c?.notes ? `<div><div class="muted small">Customer notes</div><div style="white-space:pre-wrap">${esc(c.notes)}</div></div>` : ''}
       </div>
       ${c ? `<div class="row" style="margin-top:14px">${contactBtns(c)}</div>` : ''}
       ${msgBtns ? `<div class="muted small" style="margin:12px 0 6px">Quick texts</div><div class="row">${msgBtns}</div>` : ''}
+      ${['scheduled', 'in_progress'].includes(j.status) && !(me() && openEntry(me().id)) ? `<div class="row" style="margin-top:10px">${btn('Clock in to this job', 'myClock', 'btn-sm', `data-job="${j.id}"`, 'clock')}</div>` : ''}
     </div>
     <div class="card"><div class="card-head"><h2>Job costing</h2>${btn('Add expense', 'newExpense', 'btn-sm', `data-job="${j.id}"`, 'plus')}</div>
       <div class="grid grid-3" style="gap:8px;margin-bottom:12px">
@@ -1116,18 +1141,18 @@ function seriesList() {
       customerId: jobs[0].customerId, title: jobs[0].title, assignedTo: jobs.at(-1).assignedTo, per, active: future.length > 0, monthly: per * visitsPerMonth(rule) };
   }).sort((a, b) => (a.next?.date || '9999').localeCompare(b.next?.date || '9999'));
 }
-VIEWS.plans = () => {
-  const tab = filt('plans', 'tab', 'active');
+function repeatVisitsHTML() {
+  const tab = filt('visits', 'tab', 'active');
   const all = seriesList(), active = all.filter(p => p.active), ended = all.filter(p => !p.active);
   const list = tab === 'active' ? active : ended;
   const next30 = active.reduce((n, p) => n + p.future.filter(j => j.date <= addDays(today(), 30)).length, 0);
-  return head('Recurring', btn('New recurring job', 'newJob', 'btn-primary', 'data-repeat="weekly"', 'plus'), 'Service plans and repeat visits: lawn care, cleaning, maintenance and more.') + `
-  <div class="grid grid-3">
-    <div class="card stat"><div class="label">Active plans</div><div class="value">${active.length}</div><div class="sub">${new Set(active.map(p => p.customerId)).size} customers</div></div>
+  return `
+  <div class="grid grid-3" style="margin-top:16px">
+    <div class="card stat"><div class="label">Repeating jobs</div><div class="value">${active.length}</div><div class="sub">${new Set(active.map(p => p.customerId)).size} customers</div></div>
     <div class="card stat"><div class="label">Recurring revenue</div><div class="value">${money(sum(active, p => p.monthly))}</div><div class="sub">Estimated per month</div></div>
     <div class="card stat"><div class="label">Visits next 30 days</div><div class="value">${next30}</div><div class="sub">${money(sum(active, p => p.future.filter(j => j.date <= addDays(today(), 30)).length * p.per))} booked</div></div>
   </div>
-  <div class="card" style="margin-top:16px">${tabsHTML('plans', 'tab', [['active', `Active (${active.length})`], ['ended', `Ended (${ended.length})`]], tab)}
+  <div class="card" style="margin-top:16px"><div class="row" style="justify-content:space-between">${tabsHTML('visits', 'tab', [['active', `Active (${active.length})`], ['ended', `Ended (${ended.length})`]], tab)}${btn('New recurring job', 'newJob', 'btn-sm', 'data-repeat="weekly"', 'plus')}</div>
     ${list.length ? list.map(p => `<div class="plan-row">
       <div class="grow"><div class="title"><a href="#/jobs/${(p.next || p.last).id}">${esc(p.title)}</a></div>
         <div class="muted small"><a href="#/customers/${p.customerId}">${esc(custName(p.customerId))}</a> · ${ruleLabel(p.rule)}${p.assignedTo ? ' · ' + esc(p.assignedTo) : ''}</div>
@@ -1283,6 +1308,796 @@ function activityHTML(c) {
       ${e.note ? `<button class="btn btn-icon" data-act="deleteNote" data-id="${c.id}" data-nid="${e.note}" aria-label="Delete note">✕</button>` : ''}</div>`).join('') : '<p class="muted small">Nothing yet.</p>'}</div>`;
 }
 
+/* =====================================================================
+ * Service plans (subscription agreements), templates and cards on file
+ * ===================================================================== */
+const BILLING = [['per_visit', 'Per visit'], ['monthly', 'Monthly'], ['yearly', 'Yearly'], ['upfront', 'Upfront for the term']];
+const planEnd = p => p.end || addDays(addMonths(p.start, +p.termMonths || 12), -1);
+const planTotal = p => totals(p).total;
+function planPriceLabel(p) {
+  const t = money(planTotal(p));
+  return { per_visit: `${t} per visit`, monthly: `${t} per month`, yearly: `${t} per year`, upfront: `${t} for the ${+p.termMonths || 12}-month term` }[p.billing] || t;
+}
+const planVisitDates = (p, from = p.start, to = planEnd(p)) => p.rule ? recurDates(from, { ...p.rule, count: undefined, until: to }) : [];
+function planMonthly(p) {
+  const t = totals(p).sub;
+  return { per_visit: t * visitsPerMonth(p.rule), monthly: t, yearly: t / 12, upfront: t / (+p.termMonths || 12) }[p.billing] || 0;
+}
+const planJobs = p => db.jobs.filter(j => j.planId === p.id);
+const planDone = p => planJobs(p).filter(j => j.status === 'completed').length;
+const planNext = p => planJobs(p).filter(j => j.status === 'scheduled' && j.date >= today()).sort((a, b) => a.date.localeCompare(b.date))[0];
+const planStatus = p => (p.status === 'active' && planEnd(p) < today() && !p.autoRenew ? 'ended' : p.status || 'draft');
+Object.assign(BADGE, { active: 'good', ended: '', expired: 'warn' });
+const planTermsRaw = p => p.terms || db.settings.planTerms || BH.DEFAULT_TERMS;
+function planTermsText(p) {
+  const s = db.settings;
+  return planTermsRaw(p).replace(/\{(\w+)\}/g, (m, k) => ({
+    business: s.businessName || 'The Service Provider', start: fmtDate(p.start), term: String(+p.termMonths || 12), price: planPriceLabel(p),
+    minVisits: String(+p.minVisits || 0), fee: money(+p.cancelFee || 0), customer: custName(p.customerId),
+    renew: p.autoRenew ? ` It renews automatically for another ${+p.termMonths || 12} months unless you cancel before it ends.` : '',
+  }[k] ?? m));
+}
+/** Exactly what the customer agrees to; its fingerprint ties a signature to this wording. */
+function planCanonical(p) {
+  return [p.number, custName(p.customerId), p.name, planPriceLabel(p), p.rule ? ruleLabel(p.rule) : '', p.start, +p.termMonths || 12,
+    +p.minVisits || 0, +p.cancelFee || 0, p.autoRenew ? 'renew' : '', ...(p.items || []).map(i => `${i.desc}|${i.qty}|${i.price}`), planTermsText(p)].join('\n');
+}
+function planSchedule(p) {
+  const n = planVisitDates(p).length;
+  return `${p.rule ? ruleLabel(p.rule) : 'As scheduled'} · ${n} visit${n === 1 ? '' : 's'} in the first ${+p.termMonths || 12} months`;
+}
+
+/* ----- cards on file (reference only — full numbers live with the payment processor) ----- */
+const CARD_BRANDS = ['Visa', 'Mastercard', 'American Express', 'Discover', 'Interac Debit', 'Other'];
+const PROCESSORS = ['Stripe', 'Square', 'Helcim', 'Moneris', 'Clover', 'PayPal', 'Other'];
+const cardExp = c => { const [m, y] = String(c.exp || '').split('/').map(Number); return m && y ? `20${pad(y)}-${pad(m)}` : ''; };
+function cardState(c) {
+  const e = cardExp(c), now = today().slice(0, 7);
+  if (!e) return '';
+  if (e < now) return 'expired';
+  return e <= addMonths(today(), 1).slice(0, 7) ? 'expiring' : '';
+}
+const cardLabel = c => `${c.brand || 'Card'} •••• ${c.last4}`;
+const defaultCard = cid => { const cs = cust(cid)?.cards || []; return cs.find(c => c.isDefault && cardState(c) !== 'expired') || cs.find(c => cardState(c) !== 'expired'); };
+function cardsHTML(c) {
+  const cards = c.cards || [];
+  const auths = db.subscriptions.filter(p => p.customerId === c.id && p.signature);
+  return `${cards.length ? cards.map(k => {
+    const st = cardState(k);
+    return `<div class="card-row clickable" data-act="editCard" data-id="${c.id}" data-cid="${k.id}">
+      <span class="card-chip">${esc((k.brand || 'Card').split(' ')[0])}</span>
+      <div class="grow"><div class="title">${esc(cardLabel(k))}${k.isDefault ? ' <span class="badge info">default</span>' : ''}${st ? ` <span class="badge ${st === 'expired' ? 'bad' : 'warn'}">${st}</span>` : ''}</div>
+      <div class="muted small">Exp ${esc(k.exp || '—')}${k.processor ? ` · saved in ${esc(k.processor)}` : ''}${k.name ? ` · ${esc(k.name)}` : ''}</div></div></div>`;
+  }).join('') : '<p class="muted small" style="margin:0 0 8px">No cards on file.</p>'}
+  ${auths.length ? `<p class="muted small" style="margin:8px 0 0">${icon('check').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"')} Charge authorization signed on ${auths.map(p => `<a href="#/plans/${p.id}">${esc(p.number)}</a> (${fmtDate(p.signature.at.slice(0, 10))})`).join(', ')}</p>` : ''}
+  <div class="row" style="margin-top:10px">${btn('Add card', 'newCard', 'btn-sm', `data-id="${c.id}"`, 'plus')}
+    ${db.settings.cardSetupLink && c.phone ? `<a class="btn btn-sm" href="${smsHref(c.phone, `Hi ${firstName(c.name)}, you can securely add your card for ${db.settings.businessName || 'us'} here: ${db.settings.cardSetupLink}`)}">${icon('sms')}Text secure card link</a>` : ''}</div>`;
+}
+function cardForm(c, k) {
+  const isNew = !k; k ||= { name: c.name, brand: 'Visa', processor: db.settings.processor || '', isDefault: !(c.cards || []).length };
+  modal({ title: isNew ? 'Add card on file' : 'Card on file', body: `
+    <div class="alert info" style="margin-bottom:14px">${icon('alert')}<span>For your customers' security, <b>never type the full card number here</b>. Save the card in your payment processor (${esc(db.settings.processor || 'Stripe, Square, Helcim…')}) and keep a reference here.</span></div>
+    <div class="form-grid">
+      ${field('Name on card', inp('name', k.name))}
+      ${field('Card type', `<select name="brand">${opts(CARD_BRANDS, k.brand)}</select>`)}
+      ${field('Last 4 digits *', inp('last4', k.last4, 'required inputmode="numeric" pattern="[0-9]{4}" placeholder="4242" autocomplete="off"'))}
+      ${field('Expiry (MM/YY) *', inp('exp', k.exp, 'required pattern="(0[1-9]|1[0-2])/[0-9]{2}" placeholder="08/28" inputmode="numeric" maxlength="5" autocomplete="off"'))}
+      ${field('Saved securely in', `<select name="processor">${opts(['', ...PROCESSORS].map(x => [x, x || '—']), k.processor)}</select>`)}
+      ${field('Link to this customer in your processor (optional)', inp('link', k.link, 'type="url" placeholder="https://…"'))}
+      <label class="check full"><input type="checkbox" name="isDefault" ${k.isDefault ? 'checked' : ''}> Default card for this customer</label>
+    </div>`, footExtra: isNew ? '' : `<button type="button" class="btn btn-danger js-del">Remove card</button>`,
+    onMount: (f, close) => {
+      f.exp.addEventListener('input', () => { const d = f.exp.value.replace(/\D/g, '').slice(0, 4); f.exp.value = d.length > 2 ? `${d.slice(0, 2)}/${d.slice(2)}` : d; });
+      f.last4.addEventListener('input', () => { if (f.last4.value.replace(/\D/g, '').length > 4) toast('Only the last 4 digits, please'); f.last4.value = f.last4.value.replace(/\D/g, '').slice(-4); });
+      $('.js-del', f)?.addEventListener('click', () => { const snap = snapshot(); c.cards = c.cards.filter(x => x.id !== k.id); close(); refresh(); undoToast(snap, 'Card removed'); });
+    },
+    onSubmit: (f, d) => {
+      Object.assign(k, { name: d.name.trim(), brand: d.brand, last4: d.last4, exp: d.exp, processor: d.processor, link: d.link.trim(), isDefault: !!d.isDefault });
+      c.cards ||= [];
+      if (isNew) { k.id = uid(); k.addedAt = today(); c.cards.push(k); }
+      if (k.isDefault) c.cards.forEach(x => { if (x !== k) x.isDefault = false; });
+      refresh(); toast(isNew ? 'Card added' : 'Card saved');
+    } });
+}
+
+/* ----- templates ----- */
+function templateForm(t) {
+  const isNew = !t, s = db.settings;
+  t ||= { billing: 'per_visit', termMonths: s.planTermMonths || 12, minVisits: s.planMinVisits || 2, cancelFee: s.cancelFee ?? 50, autoRenew: true, items: [], taxRate: s.taxRate, rule: { freq: 'month', interval: 6 } };
+  modal({ title: isNew ? 'New plan template' : 'Edit plan template', wide: true, body: `
+  <p class="muted small" style="margin-top:0">A template is a plan you sell often, like “Window cleaning: 2 cleans a year”. Pick it when creating a customer’s plan and everything fills in.</p>
+  <div class="form-section"><div class="form-grid">
+    ${field('Template name *', inp('name', t.name, 'required placeholder="e.g. Window cleaning: 2 cleans a year"'), 'full')}
+    ${field('Description (shown on the agreement)', inp('description', t.description), 'full')}
+  </div></div>
+  ${planTermsFields(t)}
+  <div class="form-section"><h3>What’s included &amp; price</h3>${itemsEditorHTML(t)}</div>`,
+    footExtra: isNew ? '' : `<button type="button" class="btn btn-danger js-del">Delete</button>`,
+    onMount: (f, close) => {
+      t._get = mountItemsEditor(f, t); bindPlanTerms(f, t);
+      $('.js-del', f)?.addEventListener('click', () => { const snap = snapshot(); db.planTemplates = db.planTemplates.filter(x => x.id !== t.id); close(); refresh(); undoToast(snap, 'Template deleted'); });
+    },
+    onSubmit: (f, d) => {
+      const items = t._get(); delete t._get;
+      if (!items.length) { toast('Add at least one service and price'); return false; }
+      Object.assign(t, readPlanTerms(f, d), { name: d.name.trim(), description: d.description, items, discount: +d.discount || 0, taxRate: d.taxRate === '' ? s.taxRate : +d.taxRate });
+      if (isNew) { t.id = uid(); db.planTemplates.push(t); }
+      refresh(); toast('Template saved');
+    } });
+}
+/* Fields shared by templates and agreements: billing, schedule, term, cancellation. */
+function planTermsFields(p) {
+  const presets = { 'week:1': 'weekly', 'week:2': 'biweekly', 'month:1': 'monthly', 'month:3': 'quarterly', 'month:12': 'yearly' };
+  const preset = p.rule ? presets[`${p.rule.freq}:${p.rule.interval}`] || 'custom' : 'monthly';
+  return `<div class="form-section"><h3>Schedule &amp; billing</h3><div class="form-grid">
+    ${field('Visits', `<select name="repeat">${opts([['weekly', 'Every week'], ['biweekly', 'Every 2 weeks'], ['monthly', 'Every month'], ['quarterly', 'Every 3 months'], ['yearly', 'Once a year'], ['custom', 'Custom… (e.g. every 6 months)']], preset)}</select>`)}
+    ${field('Billing', `<select name="billing">${opts(BILLING, p.billing)}</select>`)}
+    <div class="repeat-box js-repeat full">
+      <div class="js-custom ${preset === 'custom' ? '' : 'hidden'}">
+        <div class="row"><span>Every</span><input name="rInterval" type="number" min="1" max="52" value="${p.rule?.interval || 1}" style="width:72px" aria-label="Interval">
+          <select name="rFreq" style="width:auto" aria-label="Unit">${opts([['day', 'day(s)'], ['week', 'week(s)'], ['month', 'month(s)']], p.rule?.freq || 'month')}</select></div>
+        <div class="js-weekdays day-chips">${WEEKDAYS.map((d, i) => `<label class="chip"><input type="checkbox" name="rDay" value="${i}" ${(p.rule?.weekdays || []).includes(i) ? 'checked' : ''}><span>${d}</span></label>`).join('')}</div>
+      </div>
+      <div class="muted small js-repeat-preview"></div>
+    </div>
+  </div></div>
+  <div class="form-section"><h3>Term &amp; cancellation</h3><div class="form-grid">
+    ${field('Term length (months)', inp('termMonths', p.termMonths, 'type="number" min="1" max="60" required'))}
+    <label class="check" style="align-self:end;padding-bottom:10px"><input type="checkbox" name="autoRenew" ${p.autoRenew ? 'checked' : ''}> Renews automatically</label>
+    ${field('Minimum visits before free cancellation', inp('minVisits', p.minVisits, 'type="number" min="0" max="100"'))}
+    ${field('Early cancellation fee', inp('cancelFee', p.cancelFee, 'type="number" min="0" step="1"'))}
+    <p class="muted small full js-cancel-preview" style="margin:0"></p>
+  </div></div>`;
+}
+function bindPlanTerms(f, p) {
+  const sync = () => {
+    $('.js-custom', f).classList.toggle('hidden', f.repeat.value !== 'custom');
+    $('.js-weekdays', f).classList.toggle('hidden', f.rFreq.value !== 'week');
+    const r = readPlanTerms(f, Object.fromEntries(new FormData(f)));
+    const start = f.start?.value || today(), end = addDays(addMonths(start, r.termMonths), -1);
+    const dates = recurDates(start, { ...r.rule, until: end });
+    $('.js-repeat-preview', f).innerHTML = `<b>${dates.length} visit${dates.length === 1 ? '' : 's'}</b> in ${r.termMonths} months · ${ruleLabel(r.rule)}${f.start ? ` · ${dates.slice(0, 3).map(fmtDateShort).join(', ')}${dates.length > 3 ? '…' : ''}` : ''}`;
+    $('.js-cancel-preview', f).textContent = r.cancelFee
+      ? `If the customer cancels in the first ${r.termMonths} months before ${r.minVisits} visit${r.minVisits === 1 ? '' : 's'} are done, they are charged ${money(r.cancelFee)}.`
+      : 'No cancellation fee.';
+  };
+  f.addEventListener('input', sync); f.addEventListener('change', sync); sync();
+}
+function readPlanTerms(f, d) {
+  const preset = { weekly: { freq: 'week', interval: 1 }, biweekly: { freq: 'week', interval: 2 }, monthly: { freq: 'month', interval: 1 },
+    quarterly: { freq: 'month', interval: 3 }, yearly: { freq: 'month', interval: 12 } }[d.repeat];
+  const rule = preset ? { ...preset } : { freq: d.rFreq, interval: Math.max(1, +d.rInterval || 1) };
+  if (rule.freq === 'week') {
+    const days = new FormData(f).getAll('rDay').map(Number);
+    rule.weekdays = d.repeat === 'custom' && days.length ? days : [parseD(f.start?.value || today()).getDay()];
+  }
+  return { rule, billing: d.billing, termMonths: Math.max(1, +d.termMonths || 12), autoRenew: !!d.autoRenew, minVisits: Math.max(0, +d.minVisits || 0), cancelFee: Math.max(0, +d.cancelFee || 0) };
+}
+
+/* ----- agreement form ----- */
+function planForm(p, preset = {}) {
+  const isNew = !p, s = db.settings;
+  p ||= { customerId: preset.customerId, start: addDays(today(), 1), billing: 'per_visit', termMonths: s.planTermMonths || 12, minVisits: s.planMinVisits || 2,
+    cancelFee: s.cancelFee ?? 50, autoRenew: true, items: [], taxRate: s.taxRate, rule: { freq: 'month', interval: 6 } };
+  if (!isNew && p.signature && !confirm('This agreement is already signed. Changing it means the customer needs to sign again. Continue?')) return;
+  modal({ title: isNew ? 'New service plan' : `Edit ${p.number}`, wide: true, submitLabel: isNew ? 'Create plan' : 'Save', body: `
+  <div class="form-section"><div class="form-grid">
+    ${field('Customer *', customerSelect(p.customerId), 'full')}
+    ${db.planTemplates.length ? field('Start from a template', `<select name="templateId" data-nodirty><option value="">— Custom plan —</option>${opts(db.planTemplates.map(t => [t.id, t.name]), p.templateId)}</select>`, 'full') : ''}
+    ${field('Plan name *', inp('name', p.name, 'required placeholder="e.g. Window cleaning: 2 cleans a year"'), 'full')}
+    ${field('Service address', addrInput('address', p.address ?? cust(p.customerId)?.address ?? ''), 'full')}
+    ${field('First visit / start date *', inp('start', p.start, 'type="date" required'))}
+    ${assigneeField(p.assignedTo)}
+  </div></div>
+  <div class="js-terms">${planTermsFields(p)}</div>
+  <div class="form-section"><h3>What’s included &amp; price</h3><div class="js-items-wrap">${itemsEditorHTML(p)}</div></div>
+  <details class="form-section"><summary><h3>Terms &amp; conditions <span class="muted small">(tap to review or edit)</span></h3></summary>
+    <p class="muted small">Placeholders like {fee} and {term} fill in automatically. Change the default wording in Settings → Plans &amp; payments.</p>
+    <textarea name="terms" rows="12">${esc(planTermsRaw(p))}</textarea></details>`,
+    onMount: f => {
+      p._get = mountItemsEditor(f, p); bindPlanTerms(f, p);
+      bindCustomerSelect(f, nc => { if (nc && !f.address.value) f.address.value = nc.address || ''; });
+      f.templateId?.addEventListener('change', () => {
+        const t = byId('planTemplates', f.templateId.value); if (!t) return;
+        f.name.value = t.name;
+        $('.js-terms', f).innerHTML = planTermsFields(t);
+        $('.js-items-wrap', f).innerHTML = itemsEditorHTML(t);
+        p._get = mountItemsEditor(f, t);
+        if (t.terms) f.terms.value = t.terms;
+        f.dispatchEvent(new Event('change'));
+      });
+    },
+    onSubmit: (f, d) => {
+      const items = p._get(); delete p._get;
+      if (!items.length) { toast('Add at least one service and price'); return false; }
+      const before = isNew ? '' : planCanonical(p);
+      Object.assign(p, readPlanTerms(f, d), { customerId: d.customerId, templateId: d.templateId || p.templateId || '', name: d.name.trim(), address: d.address,
+        start: d.start, assignedTo: d.assignedTo, items, discount: +d.discount || 0, taxRate: d.taxRate === '' ? s.taxRate : +d.taxRate,
+        terms: d.terms.trim() === (s.planTerms || BH.DEFAULT_TERMS).trim() ? '' : d.terms });
+      p.end = '';
+      if (isNew) { Object.assign(p, { id: uid(), number: nextPlanNumber(), status: 'draft', createdAt: today() }); db.subscriptions.push(p); }
+      else if (p.signature && before !== planCanonical(p)) { p.signature = null; p.status = 'draft'; toast('Changes saved. Ask the customer to sign the updated agreement.'); }
+      save(); go('#/plans/' + p.id);
+    } });
+}
+function nextPlanNumber() {
+  const s = db.settings; let n;
+  do { n = (s.planPrefix || 'SP-') + (s.nextPlanNo++); } while (db.subscriptions.some(x => x.number === n));
+  return n;
+}
+
+/* ----- agreement document ----- */
+function planDocHTML(p) {
+  const c = cust(p.customerId) || {}, t = totals(p), s = db.settings;
+  return `<div class="doc">
+    <div class="doc-top"><div>${bizBlock()}</div>
+      <div><h1 style="font-size:22px">SERVICE AGREEMENT</h1>
+        <div class="meta"><div><span>Agreement #</span><b>${esc(p.number)}</b></div><div><span>Starts</span><b>${fmtDate(p.start)}</b></div>
+        <div><span>Term</span><b>${+p.termMonths || 12} months${p.autoRenew ? ', auto-renews' : ''}</b></div></div></div></div>
+    <div class="bill-to"><div class="lbl">Customer</div><b>${esc(c.name || '')}</b>
+      <div style="white-space:pre-line;color:#444">${esc([p.address || c.address, c.phone, c.email].filter(Boolean).join('\n'))}</div></div>
+    <h2 style="font-size:17px;margin:0 0 4px">${esc(p.name)}</h2>
+    <p style="margin:0 0 10px;color:#444">${esc(planSchedule(p))}</p>
+    <table><thead><tr><th>Included service</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead><tbody>
+      ${(p.items || []).map(it => `<tr><td>${esc(it.desc)}${it.details ? `<div style="color:#666;font-size:12px">${esc(it.details)}</div>` : ''}</td><td class="num">${+it.qty}</td><td class="num">${money(it.price)}</td><td class="num">${money(it.qty * it.price)}</td></tr>`).join('')}
+    </tbody></table>
+    <div class="totals"><div><span>Subtotal</span><span>${money(t.sub)}</span></div>${t.disc ? `<div><span>Discount</span><span>−${money(t.disc)}</span></div>` : ''}
+      <div><span>${esc(s.taxName)} (${t.rate}%)</span><span>${money(t.tax)}</span></div>
+      <div class="grand"><span>Price</span><span>${esc(planPriceLabel(p))}</span></div></div>
+    ${+p.cancelFee ? `<div class="doc-callout"><b>Early cancellation fee: ${money(p.cancelFee)}.</b> Charged to the card on file if the plan is cancelled within the first ${+p.termMonths || 12} months before ${+p.minVisits || 0} visit${+p.minVisits === 1 ? '' : 's'} ${+p.minVisits === 1 ? 'is' : 'are'} completed.</div>` : ''}
+    <div class="notes"><div class="lbl">Terms and conditions</div><div style="white-space:pre-wrap">${esc(planTermsText(p))}</div></div>
+    <div class="sig-block">
+      ${p.signature ? `<div>${BH.sigSVG(p.signature.strokes)}</div>
+        <div class="sig-line"><b>${esc(p.signature.name)}</b> · signed ${new Date(p.signature.at).toLocaleString()} · ${p.signature.method === 'remote' ? 'signed online' : 'signed in person'}</div>`
+      : '<div class="sig-empty"></div><div class="sig-line">Customer signature · Date</div>'}
+    </div>
+  </div>`;
+}
+VIEWS.plans = id => {
+  if (id) return planDetail(id);
+  const tab = filt('plans', 'tab', 'agreements');
+  const tabs = tabsHTML('plans', 'tab', [['agreements', `Agreements (${db.subscriptions.length})`], ['templates', `Templates (${db.planTemplates.length})`], ['visits', 'Repeat visits']], tab);
+  const headActions = btn('New service plan', 'newPlan', 'btn-primary', '', 'plus') + moreMenu([menuItem('New plan template', 'newTemplate', '', 'plus'), menuItem('Plan settings', 'planSettings', '', 'settings')]);
+  if (tab === 'visits') return head('Service plans', headActions, 'Repeat visits from every recurring job, with or without an agreement.') + `<div class="card">${tabs}</div>` + repeatVisitsHTML();
+  if (tab === 'templates') {
+    return head('Service plans', headActions, 'Templates for the plans you sell most.') + `<div class="card">${tabs}
+      ${db.planTemplates.length ? db.planTemplates.map(t => `<div class="plan-row clickable" data-act="editTemplate" data-id="${t.id}">
+        <div class="grow"><div class="title">${esc(t.name)}</div><div class="muted small">${esc(ruleLabel(t.rule))} · ${+t.termMonths} months${t.autoRenew ? ', auto-renews' : ''} · ${+t.cancelFee ? `${money(t.cancelFee)} early cancellation fee` : 'no cancellation fee'}</div></div>
+        <div class="right"><b class="num">${esc(planPriceLabel(t))}</b></div></div>`).join('')
+        : empty('repeat', 'No templates yet. Create one for each plan you sell, like “2 cleans a year”.', btn('New plan template', 'newTemplate', 'btn-sm'))}</div>`;
+  }
+  const status = filt('plans', 'status', 'all'), q = filt('plans', 'q', '').toLowerCase();
+  const subs = db.subscriptions.map(p => ({ p, st: planStatus(p) }));
+  const active = subs.filter(x => x.st === 'active');
+  const awaiting = subs.filter(x => ['draft', 'sent'].includes(x.st));
+  const list = subs.filter(x => status === 'all' || (status === 'awaiting' ? ['draft', 'sent'].includes(x.st) : x.st === status))
+    .filter(x => !q || `${x.p.number} ${x.p.name} ${custName(x.p.customerId)}`.toLowerCase().includes(q)).reverse();
+  return head('Service plans', headActions, 'Recurring service agreements your customers sign, with terms and a card on file.') + `
+  <div class="grid grid-3">
+    <div class="card stat"><div class="label">Active plans</div><div class="value">${active.length}</div><div class="sub">${new Set(active.map(x => x.p.customerId)).size} customers</div></div>
+    <div class="card stat"><div class="label">Recurring revenue</div><div class="value">${money(sum(active, x => planMonthly(x.p)))}</div><div class="sub">Estimated per month, before tax</div></div>
+    <div class="card stat"><div class="label">Waiting for signature</div><div class="value">${awaiting.length}</div><div class="sub">${awaiting.filter(x => x.st === 'sent').length} sent</div></div>
+  </div>
+  <div class="card" style="margin-top:16px">${tabs}
+    <div class="toolbar"><input type="search" placeholder="Search plans…" value="${esc(q)}" data-filter="plans:q">
+      <select data-filter="plans:status" style="width:auto" aria-label="Status">${opts([['all', 'All statuses'], ['active', 'Active'], ['awaiting', 'Waiting for signature'], ['cancelled', 'Cancelled'], ['ended', 'Ended']], status)}</select></div>
+    ${list.length ? list.map(({ p, st }) => { const nx = planNext(p); return `<a class="plan-row" href="#/plans/${p.id}" style="color:inherit">
+      <div class="grow"><div class="title">${esc(custName(p.customerId))} <span class="muted small">· ${esc(p.number)}</span></div>
+        <div class="muted small">${esc(p.name)} · ${esc(planPriceLabel(p))}</div>
+        <div class="small" style="margin-top:3px">${st === 'active' ? `${planDone(p)} done${nx ? ` · next visit <b>${fmtDateShort(nx.date)}</b>` : ''} · renews ${p.autoRenew ? 'automatically' : 'manually'} ${fmtDate(planEnd(p))}` : st === 'sent' ? `Sent ${fmtDate(p.sentAt)} · waiting for signature` : st === 'cancelled' ? `Cancelled ${fmtDate(p.cancelledAt)}` : st === 'ended' ? `Ended ${fmtDate(planEnd(p))}` : 'Not sent yet'}</div></div>
+      ${badge(st === 'sent' ? 'sent' : st)}</a>`; }).join('')
+      : empty('repeat', db.subscriptions.length ? 'No plans match.' : 'No service plans yet. Create one and send it to your customer to sign.', btn('New service plan', 'newPlan', 'btn-sm'))}
+  </div>`;
+};
+function planDetail(id) {
+  const p = byId('subscriptions', id); if (!p) return empty('repeat', 'Plan not found.', '<a class="btn btn-sm" href="#/plans">Back to plans</a>');
+  const c = cust(p.customerId) || {}, st = planStatus(p), card = defaultCard(p.customerId);
+  const a = (l, act, cls = '', ic = '') => btn(l, act, cls, `data-id="${p.id}"`, ic);
+  const jobs = planJobs(p).sort((x, y) => x.date.localeCompare(y.date)), done = planDone(p), nx = planNext(p);
+  const invs = db.invoices.filter(i => i.planId === p.id).reverse();
+  const actions = ['draft', 'sent'].includes(st)
+    ? a('Sign in person', 'signPlan', 'btn-primary', 'edit') + a(st === 'sent' ? 'Resend for signature' : 'Send for signature', 'sendPlan', '', 'share')
+    : st === 'active' ? a('Cancel plan', 'cancelPlan', '', 'alert') : st === 'ended' ? a('Renew plan', 'renewPlan', 'btn-primary', 'repeat') : '';
+  return head(`${esc(p.number)} ${badge(st)}`, actions + a('Print / PDF', 'printPlan', '', 'print') + moreMenu([
+    st !== 'cancelled' && menuItem('Edit plan', 'editPlan', `data-id="${p.id}"`, 'edit'),
+    st === 'active' && !p.autoRenew && menuItem('Renew for another term', 'renewPlan', `data-id="${p.id}"`, 'repeat'),
+    menuItem('Duplicate for another customer', 'dupPlan', `data-id="${p.id}"`, 'quote'),
+    menuLink('View customer', `#/customers/${p.customerId}`, 'users'),
+    menuItem('Delete', 'deletePlan', `data-id="${p.id}"`, 'trash', 'danger'),
+  ]), `<a href="#/plans">← All plans</a> · <a href="#/customers/${c.id}">${esc(c.name || '')}</a>`) + `
+  ${st === 'sent' ? `<div class="alert info no-print" style="margin:0 auto 12px;max-width:820px">${icon('share')}<span>Sent for signature ${fmtDate(p.sentAt)}. When ${esc(firstName(c.name))} signs, they send you a link. Open it on this device to record the signature.</span></div>` : ''}
+  ${st === 'active' && !card ? `<div class="alert warn no-print" style="margin:0 auto 12px;max-width:820px">${icon('expense')}<span>No card on file for ${esc(c.name)}. <button class="link-btn" data-act="newCard" data-id="${c.id}">Add a card</button> so you can charge plan payments and fees.</span></div>` : ''}
+  <div class="plan-layout">
+    <div>${planDocHTML(p)}</div>
+    <aside class="stack no-print">
+      ${st === 'active' || st === 'ended' || st === 'cancelled' ? `<div class="card"><h2 style="margin-bottom:8px">Visits</h2>
+        <div class="progress"><i style="width:${jobs.length ? Math.round(done / jobs.length * 100) : 0}%"></i></div>
+        <p class="small" style="margin:8px 0">${done} of ${jobs.length} done${nx ? ` · next <a href="#/jobs/${nx.id}">${fmtDateShort(nx.date)}</a>` : ''}</p>
+        ${+p.minVisits ? `<p class="muted small" style="margin:0">Free cancellation after ${p.minVisits} visit${+p.minVisits === 1 ? '' : 's'}${done >= +p.minVisits ? ' ✓ reached' : ` (${+p.minVisits - done} to go)`}.</p>` : ''}
+        <div style="margin-top:8px">${jobs.slice(0, 8).map(j => `<a class="mini-row" href="#/jobs/${j.id}"><span>${fmtDateShort(j.date)}</span>${badge(j.status)}</a>`).join('')}${jobs.length > 8 ? `<p class="muted small">+${jobs.length - 8} more</p>` : ''}</div></div>` : ''}
+      <div class="card"><h2 style="margin-bottom:8px">Card on file</h2>
+        ${card ? `<div class="card-row"><span class="card-chip">${esc(card.brand.split(' ')[0])}</span><div class="grow"><b>${esc(cardLabel(card))}</b><div class="muted small">Exp ${esc(card.exp)}${card.processor ? ' · ' + esc(card.processor) : ''}</div></div></div>`
+          : '<p class="muted small" style="margin:0 0 8px">None yet.</p>'}
+        <div class="row" style="margin-top:8px">${btn(card ? 'Manage cards' : 'Add card', card ? 'goCustomerCards' : 'newCard', 'btn-sm', `data-id="${c.id}"`, card ? 'expense' : 'plus')}</div>
+        ${p.signature ? `<p class="muted small" style="margin:8px 0 0">Charge authorization signed ${fmtDate(p.signature.at.slice(0, 10))}.</p>` : ''}</div>
+      ${invs.length ? `<div class="card"><h2 style="margin-bottom:8px">Billing</h2>${invs.slice(0, 8).map(i => `<a class="mini-row" href="#/invoices/${i.id}"><span>${esc(i.number)} · ${money(totals(i).total)}</span>${badge(invStatus(i))}</a>`).join('')}</div>` : ''}
+      ${p.cancelledAt ? `<div class="card"><h2 style="margin-bottom:6px">Cancelled</h2><p class="small" style="margin:0">${fmtDate(p.cancelledAt)}${p.cancelReason ? ' · ' + esc(p.cancelReason) : ''}</p>
+        ${p.feeInvoiceId && byId('invoices', p.feeInvoiceId) ? `<p class="small">Cancellation fee: <a href="#/invoices/${p.feeInvoiceId}">${esc(byId('invoices', p.feeInvoiceId).number)}</a> ${badge(invStatus(byId('invoices', p.feeInvoiceId)))}</p>` : '<p class="muted small">No cancellation fee charged.</p>'}</div>` : ''}
+    </aside>
+  </div>`;
+}
+
+/* ----- signing ----- */
+function signPlanInPerson(p) {
+  const c = cust(p.customerId) || {}, cards = (c.cards || []).filter(k => cardState(k) !== 'expired');
+  let pad;
+  modal({ title: `Sign ${p.number}`, wide: true, submitLabel: 'Sign & activate plan', body: `
+    <div class="sign-review"><b>${esc(p.name)}</b> · ${esc(planPriceLabel(p))}<br><span class="muted small">${esc(planSchedule(p))} · starts ${fmtDate(p.start)}</span>
+      ${+p.cancelFee ? `<div class="doc-callout" style="margin:10px 0 0">Early cancellation fee <b>${money(p.cancelFee)}</b> if cancelled within ${+p.termMonths} months before ${+p.minVisits} visits are done.</div>` : ''}
+      <details style="margin-top:10px"><summary class="small"><b>Read the full terms</b></summary><div class="sign-terms" style="margin-top:8px">${esc(planTermsText(p))}</div></details></div>
+    <div class="form-grid" style="margin-top:14px">
+      ${field('Customer’s full name *', inp('name', c.name, 'required autocomplete="off"'), 'full')}
+      ${field('Card to charge', cards.length ? `<select name="cardId">${opts(cards.map(k => [k.id, `${cardLabel(k)} · exp ${k.exp}`]), defaultCard(c.id)?.id)}</select>`
+        : `<p class="muted small" style="margin:6px 0 0">No card on file yet. You can add one after signing.</p>`, 'full')}
+      <div class="field full"><label>Customer signature *</label><div class="sig-box"><canvas class="js-sig" aria-label="Signature pad"></canvas><span class="sig-hint">Sign here</span></div>
+        <button type="button" class="btn btn-sm js-clear-sig" style="align-self:flex-start;margin-top:6px">Clear</button></div>
+      <label class="check full"><input type="checkbox" name="agree" required> I have read and agree to this agreement and its terms, and I authorize ${esc(db.settings.businessName || 'the business')} to charge my card on file as described.</label>
+    </div>`,
+    onMount: f => {
+      const hint = $('.sig-hint', f);
+      setTimeout(() => { pad = new BH.SignaturePad($('.js-sig', f), e => { hint.style.display = e ? '' : 'none'; }); }, 50);
+      $('.js-clear-sig', f).addEventListener('click', () => pad?.clear());
+    },
+    onSubmit: (f, d) => {
+      if (!pad || pad.isEmpty()) { toast('Please sign in the box'); return false; }
+      BH.fingerprint(planCanonical(p)).then(h => {
+        p.signature = { name: d.name.trim(), at: new Date().toISOString(), strokes: pad.strokes.filter(s => s.length > 1), method: 'in_person', hash: h };
+        p.cardId = d.cardId || '';
+        pad.destroy(); activatePlan(p);
+      });
+    } });
+}
+async function planSignLink(p) {
+  const c = cust(p.customerId) || {}, s = db.settings;
+  const base = location.href.split('#')[0].replace(/index\.html$/, '');
+  const payload = {
+    id: p.id, n: p.number, h: await BH.fingerprint(planCanonical(p)), r: base,
+    b: { name: s.businessName || 'Your service provider', phone: s.phone, email: s.email },
+    c: { name: c.name, first: firstName(c.name), address: p.address || c.address || '' },
+    p: { name: p.name, price: planPriceLabel(p), schedule: planSchedule(p), start: fmtDate(p.start), term: `${+p.termMonths || 12} months${p.autoRenew ? ', renews automatically' : ''}`,
+      termMonths: +p.termMonths || 12, minVisits: +p.minVisits || 0, fee: +p.cancelFee ? money(p.cancelFee) : '',
+      items: (p.items || []).map(i => [i.desc, String(+i.qty), money(i.price)]) },
+    t: planTermsText(p), cs: s.cardSetupLink || '',
+  };
+  return `${base}sign.html#${await BH.pack(payload)}`;
+}
+async function sendPlan(p) {
+  const c = cust(p.customerId) || {};
+  let link;
+  try { link = await planSignLink(p); } catch { return toast('Could not create the signing link in this browser'); }
+  const msg = `Hi ${firstName(c.name)}, here is your ${p.name} agreement from ${db.settings.businessName || 'us'}. Please review and sign here: ${link}`;
+  const mark = () => { p.status = 'sent'; p.sentAt = today(); save(); setTimeout(render, 300); };
+  modal({ title: `Send ${p.number} for signature`, noFoot: true, body: `
+    <p class="muted small" style="margin-top:0">${esc(c.name)} opens the link, reads the agreement, signs with their finger and taps <b>Send</b>. You’ll get a link back. Open it here to record the signature and start the plan.</p>
+    <div class="stack" style="gap:8px">
+      ${c.phone ? `<a class="btn btn-primary js-send" href="${smsHref(c.phone, msg)}">${icon('sms')}Text to ${esc(c.phone)}</a>` : ''}
+      ${c.email ? `<a class="btn ${c.phone ? '' : 'btn-primary'} js-send" href="${mailHref(c.email, `Your service agreement ${p.number}`, msg)}">${icon('mail')}Email to ${esc(c.email)}</a>` : ''}
+      <button type="button" class="btn js-copy">${icon('share')}Copy signing link</button>
+      <a class="btn" href="${esc(link)}" target="_blank" rel="noopener">Preview what ${esc(firstName(c.name))} sees ↗</a>
+    </div>`,
+    onMount: (f, close) => {
+      $$('.js-send', f).forEach(x => x.addEventListener('click', () => { mark(); setTimeout(close, 200); }));
+      $('.js-copy', f).addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(msg); toast('Link copied. Paste it into a message.'); } catch { prompt('Copy this link:', link); }
+        mark(); close();
+      });
+    } });
+}
+async function receiveSignature(data) {
+  $('#main').innerHTML = '<div class="empty">Checking the signature…</div>';
+  let r;
+  try { r = await BH.unpack(data); } catch { $('#main').innerHTML = empty('alert', 'This signed link could not be read. It may have been cut off. Ask the customer to tap Copy link and send it again.'); return; }
+  const p = byId('subscriptions', r.id);
+  if (!p) { $('#main').innerHTML = empty('alert', `Agreement ${esc(r.n)} isn’t on this device. Open the link on the phone or computer where you created the plan.`); return; }
+  if (p.signature?.at === r.at) { go('#/plans/' + p.id); return; }
+  const h = await BH.fingerprint(planCanonical(p));
+  if (h !== r.h) {
+    $('#main').innerHTML = empty('alert', `${esc(p.number)} was changed after it was sent, so this signature doesn’t match the current wording. Send the updated agreement again.`, `<a class="btn btn-sm" href="#/plans/${p.id}">Open ${esc(p.number)}</a>`);
+    return;
+  }
+  p.signature = { name: r.name, at: r.at, strokes: r.sig, method: 'remote', hash: h };
+  history.replaceState(null, '', '#/plans/' + p.id);
+  activatePlan(p);
+}
+function activatePlan(p) {
+  const c = cust(p.customerId);
+  p.status = 'active'; p.activatedAt = today(); p.end = planEnd(p);
+  if (!p.seriesId) p.seriesId = uid();
+  addPlanVisits(p, p.start, p.end);
+  if (p.billing === 'upfront') billPlan(p, p.start, `${p.name} · ${fmtDate(p.start)} to ${fmtDate(p.end)}`);
+  if (['monthly', 'yearly'].includes(p.billing)) { p.nextBill = p.start; processPlans(true); }
+  (c.log ||= []).push({ id: uid(), date: today(), text: `Signed service agreement ${p.number} (${p.name})` });
+  save(); go('#/plans/' + p.id);
+  toast(`${p.number} signed and active · visits scheduled`);
+}
+function addPlanVisits(p, from, to) {
+  const dates = planVisitDates(p, from, to), perVisit = p.billing === 'per_visit';
+  dates.forEach(date => {
+    if (db.jobs.some(j => j.planId === p.id && j.date === date)) return;
+    db.jobs.push({ id: uid(), createdAt: today(), customerId: p.customerId, title: p.name, date, start: '', end: '', address: p.address || cust(p.customerId)?.address || '',
+      assignedTo: p.assignedTo || '', status: 'scheduled', notes: `Service plan ${p.number}`, items: perVisit ? structuredClone(p.items) : [], discount: perVisit ? p.discount : 0,
+      taxRate: p.taxRate, seriesId: p.seriesId, seriesRule: p.rule, planId: p.id, noInvoice: !perVisit });
+  });
+  return dates.length;
+}
+function billPlan(p, date, label) {
+  const inv = invoiceFromItems({ customerId: p.customerId, serviceAddress: p.address, items: p.items.map(i => ({ ...i, details: i.details || label })), discount: p.discount, taxRate: p.taxRate },
+    { planId: p.id, date, dueDate: date, sent: true, sentAt: date, notes: `Service plan ${p.number} · ${label}` });
+  return inv;
+}
+/** Billing runs, renewals and plan endings. Runs when the app opens. */
+function processPlans(quiet = false) {
+  const t = today(); let billed = 0, renewed = 0;
+  for (const p of db.subscriptions) {
+    if (p.status !== 'active') continue;
+    let guard = 0;
+    while (['monthly', 'yearly'].includes(p.billing) && p.nextBill && p.nextBill <= t && p.nextBill <= planEnd(p) && guard++ < 36) {
+      const step = p.billing === 'monthly' ? 1 : 12;
+      billPlan(p, p.nextBill, `${p.billing === 'monthly' ? 'Monthly' : 'Yearly'} plan payment · ${fmtDate(p.nextBill)}`);
+      p.nextBill = addMonths(p.nextBill, step); billed++;
+    }
+    if (p.autoRenew && planEnd(p) < addDays(t, 30)) { renewPlanTerm(p); renewed++; }
+  }
+  if (billed + renewed) { save(); if (!quiet) setTimeout(() => toast([billed && `${billed} plan invoice${billed > 1 ? 's' : ''} created`, renewed && `${renewed} plan${renewed > 1 ? 's' : ''} renewed`].filter(Boolean).join(' · ')), 700); }
+}
+function renewPlanTerm(p) {
+  const from = addDays(planEnd(p), 1);
+  p.end = addDays(addMonths(from, +p.termMonths || 12), -1);
+  p.renewals = (p.renewals || 0) + 1;
+  if (p.status !== 'active') p.status = 'active';
+  addPlanVisits(p, from, p.end);
+  if (p.billing === 'upfront') billPlan(p, from, `${p.name} · ${fmtDate(from)} to ${fmtDate(p.end)}`);
+  if (['monthly', 'yearly'].includes(p.billing) && (!p.nextBill || p.nextBill < from)) p.nextBill = from;
+}
+function cancelPlanForm(p) {
+  const c = cust(p.customerId) || {}, done = planDone(p);
+  const inFirstTerm = today() <= addDays(addMonths(p.start, +p.termMonths || 12), -1);
+  const applies = +p.cancelFee > 0 && inFirstTerm && done < (+p.minVisits || 0);
+  const card = defaultCard(p.customerId), future = planJobs(p).filter(j => j.status === 'scheduled' && j.date >= today());
+  modal({ title: `Cancel ${p.number}`, submitLabel: 'Cancel plan', body: `
+    <div class="cancel-summary">
+      <div><span>Started</span><b>${fmtDate(p.start)}</b></div>
+      <div><span>Visits done</span><b>${done} of ${+p.minVisits || 0} required</b></div>
+      <div><span>First ${+p.termMonths || 12} months</span><b>${inFirstTerm ? 'Still within' : 'Completed'}</b></div>
+      <div><span>Upcoming visits removed</span><b>${future.length}</b></div>
+    </div>
+    ${+p.cancelFee ? `<div class="alert ${applies ? 'warn' : 'info'}" style="margin:12px 0">${icon('alert')}<span>${applies
+      ? `The early cancellation fee of <b>${money(p.cancelFee)}</b> applies under the signed agreement.`
+      : `No cancellation fee: ${inFirstTerm ? `${done} visit${done === 1 ? '' : 's'} already done` : `the first ${+p.termMonths} months are over`}.`}</span></div>` : ''}
+    <div class="form-grid">
+      ${+p.cancelFee ? `<label class="check full"><input type="checkbox" name="charge" ${applies ? 'checked' : ''}> Charge the ${money(p.cancelFee)} cancellation fee${card ? ` to ${esc(cardLabel(card))}` : ''}</label>` : ''}
+      ${field('Reason', `<select name="reason">${opts(['', 'Moving', 'Price', 'Not happy with service', 'Doing it themselves', 'Switched provider', 'Other'].map(x => [x, x || '—']), '')}</select>`, 'full')}
+    </div>`,
+    onSubmit: (f, d) => {
+      const snap = snapshot(), ids = new Set(future.map(j => j.id));
+      db.jobs = db.jobs.filter(j => !ids.has(j.id));
+      Object.assign(p, { status: 'cancelled', cancelledAt: today(), cancelReason: d.reason });
+      (c.log ||= []).push({ id: uid(), date: today(), text: `Cancelled service plan ${p.number}${d.reason ? ' (' + d.reason + ')' : ''}` });
+      if (d.charge) {
+        const inv = invoiceFromItems({ customerId: p.customerId, items: [{ desc: `Early cancellation fee · service agreement ${p.number}`, details: `Cancelled ${fmtDate(today())}, ${done} of ${p.minVisits} visits completed`, qty: 1, price: +p.cancelFee, taxable: false }] },
+          { planId: p.id, dueDate: today(), sent: true, sentAt: today(), isFee: true, notes: `Early cancellation fee per signed service agreement ${p.number}.` });
+        p.feeInvoiceId = inv.id; save(); go('#/invoices/' + inv.id);
+        undoToast(snap, card ? `Plan cancelled. Charge ${money(p.cancelFee)} to ${cardLabel(card)}.` : 'Plan cancelled. Fee invoice created.');
+      } else { refresh(); undoToast(snap, 'Plan cancelled'); }
+    } });
+}
+
+/* ----- charging a card on file ----- */
+function chargeCard(inv) {
+  const c = cust(inv.customerId), card = defaultCard(inv.customerId), bal = balance(inv);
+  const url = card?.link || db.settings.processorUrl;
+  modal({ title: `Charge ${money(bal)}`, submitLabel: 'Record payment', body: `
+    ${card ? `<div class="card-row" style="margin-bottom:12px"><span class="card-chip">${esc(card.brand.split(' ')[0])}</span><div class="grow"><b>${esc(cardLabel(card))}</b>
+      <div class="muted small">${esc(c?.name || '')} · exp ${esc(card.exp)}${card.processor ? ' · saved in ' + esc(card.processor) : ''}</div></div></div>` : ''}
+    <ol class="steps">
+      <li>${url ? `<a class="btn btn-sm btn-primary" href="${esc(url)}" target="_blank" rel="noopener">Open ${esc(card?.processor || db.settings.processor || 'your payment processor')} ↗</a> and charge` : `In ${esc(card?.processor || db.settings.processor || 'your card terminal or payment app')}, charge`} <b>${money(bal)}</b> to ${card ? esc(cardLabel(card)) : 'the card on file'}.</li>
+      <li>Then record the payment here so your books stay up to date.</li>
+    </ol>
+    <div class="form-grid">${field('Amount charged', inp('amount', bal.toFixed(2), 'type="number" step="0.01" min="0.01" required'))}${field('Date', inp('date', today(), 'type="date" required'))}
+      ${field('Reference (optional)', inp('note', '', 'placeholder="Processor receipt / transaction ID"'), 'full')}</div>
+    ${!url ? '<p class="muted small">Tip: add your processor’s dashboard link in Settings → Plans &amp; payments to open it in one tap.</p>' : ''}`,
+    onSubmit: (f, d) => {
+      (inv.payments ||= []).push({ id: uid(), amount: round2(d.amount), date: d.date, method: card ? `Card on file (${cardLabel(card)})` : 'Credit card', note: d.note });
+      inv.sent = true; refresh(); toast(balance(inv) <= 0 ? 'Paid in full 🎉' : 'Payment recorded');
+    } });
+}
+
+/* ----- time clock: always-visible button + dashboard card ----- */
+const me = () => byId('team', db.settings.meId);
+function clockWidget() {
+  const m = me(), e = m && openEntry(m.id);
+  return `<button class="clock-btn ${e ? 'on' : ''}" data-act="myClock" aria-label="${e ? 'Clock out' : 'Clock in'}">${icon('clock')}<span class="clock-label">${e
+    ? `<span class="hide-xs">On the clock · </span><b data-since="${e.in}">${fmtHours(hoursOf(e))}</b>` : 'Clock in'}</span></button>`;
+}
+function myHours(from, to) { const m = me(); return m ? sum(db.timeEntries.filter(t => t.memberId === m.id && inRange(localDate(t.in), from, to)), hoursOf) : 0; }
+function clockCard() {
+  const m = me(), e = m && openEntry(m.id), j = e?.jobId && byId('jobs', e.jobId);
+  const ws = addDays(today(), -parseD(today()).getDay());
+  const others = db.team.filter(x => x.id !== m?.id && openEntry(x.id));
+  return `<div class="card clock-card ${e ? 'on' : ''}"><div class="card-head"><h2>Time clock</h2><a href="#/team" data-tabset="team:tab:time" class="small">Timesheets →</a></div>
+    <div class="row" style="flex-wrap:nowrap;gap:14px">
+      <div class="grow">${e ? `<div class="clock-big" data-since="${e.in}">${fmtHours(hoursOf(e))}</div><div class="muted small">On the clock since ${fmtClock(e.in)}${j ? ` · <a href="#/jobs/${j.id}">${esc(j.title)}</a>` : ''}</div>`
+        : `<div class="clock-big muted">Off the clock</div><div class="muted small">${m ? `${esc(m.name)} · ` : ''}today ${fmtHours(myHours(today(), today()))} · this week ${fmtHours(myHours(ws, today()))}</div>`}</div>
+      ${btn(e ? 'Clock out' : 'Clock in', 'myClock', e ? '' : 'btn-primary', '', 'clock')}</div>
+    ${others.length ? `<div class="muted small" style="margin-top:10px">Also on the clock: ${others.map(x => `<span class="dot" style="background:${x.color}"></span>${esc(x.name)} since ${fmtClock(openEntry(x.id).in)}`).join(' · ')}</div>` : ''}
+  </div>`;
+}
+function chooseMe(then) {
+  if (!db.team.length) {
+    const m = { id: uid(), name: db.settings.ownerName || 'Me', role: 'Owner', color: TEAM_COLORS[0], phone: db.settings.phone || '', email: db.settings.email || '', rate: 0 };
+    db.team.push(m); db.settings.meId = m.id; save(); return then();
+  }
+  modal({ title: 'Who are you?', submitLabel: 'Continue', body: `<p class="muted small" style="margin-top:0">Pick your name so the clock button tracks your own hours. You can change this in Team &amp; time.</p>
+    ${field('Team member', `<select name="m">${opts(db.team.map(x => [x.id, x.name]))}</select>`)}`,
+    onSubmit: (f, d) => { db.settings.meId = d.m; save(); setTimeout(then, 0); } });
+}
+setInterval(() => $$('[data-since]').forEach(el => { el.textContent = fmtHours(hoursOf({ in: el.dataset.since, out: '' })); }), 30000);
+
+/* =====================================================================
+ * Door knocking: pin every house on a map, track outcomes and stats
+ * ===================================================================== */
+const KNOCK = {
+  sale: { label: 'Sale', short: 'Yes', color: '#15803d', svg: '<path d="M6 12.5l4 4 8-9" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>' },
+  quote: { label: 'Quoted', short: 'Quote', color: '#10b981', svg: '<path d="M8 4.5h6l3.5 3.5V19a.8.8 0 0 1-.8.8H8a.8.8 0 0 1-.8-.8V5.3A.8.8 0 0 1 8 4.5z" fill="#fff"/><path d="M9.5 10.5h5M9.5 13h5M9.5 15.5h3.5" stroke="#10b981" stroke-width="1.4" stroke-linecap="round"/>' },
+  comeback: { label: 'Come back later', short: 'Come back', color: '#d97706', svg: '<circle cx="12" cy="12" r="6.5" fill="none" stroke="#fff" stroke-width="2.4"/><path d="M12 8.5V12l2.5 1.8" stroke="#fff" stroke-width="2.4" fill="none" stroke-linecap="round"/>' },
+  no: { label: 'Not interested', short: 'No', color: '#dc2626', svg: '<path d="M8 8l8 8M16 8l-8 8" stroke="#fff" stroke-width="3" stroke-linecap="round"/>' },
+  nothome: { label: 'Not home', short: 'Not home', color: '#64748b', svg: '<path d="M6.5 12 12 7.5l5.5 4.5v6h-11z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M10.5 18v-3.5h3V18" stroke="#fff" stroke-width="1.8" fill="none"/>' },
+};
+const KNOCK_ORDER = ['sale', 'quote', 'comeback', 'no', 'nothome'];
+const knockIcon = (st, size = 28) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true"><circle cx="12" cy="12" r="11.5" fill="${KNOCK[st]?.color || '#64748b'}" stroke="#fff" stroke-width="1"/>${KNOCK[st]?.svg || ''}</svg>`;
+const knockEvents = (from, to, rep = '') => db.pins.flatMap(p => (p.history || []).map(h => ({ ...h, pin: p })))
+  .filter(e => inRange(e.at.slice(0, 10), from, to) && (!rep || e.rep === rep));
+function knockStats(from, to, rep) {
+  const ev = knockEvents(from, to, rep), n = k => ev.filter(e => e.status === k).length;
+  const answered = ev.filter(e => e.status !== 'nothome').length;
+  return { doors: ev.length, sale: n('sale'), quote: n('quote'), comeback: n('comeback'), no: n('no'), nothome: n('nothome'), answered, ev };
+}
+const comebacksDue = (until = today()) => db.pins.filter(p => p.status === 'comeback' && (!p.comebackDate || p.comebackDate <= until)).sort((a, b) => (a.comebackDate || '').localeCompare(b.comebackDate || ''));
+
+let leafletP, map, pinLayer, meMarker, geoWatch, lastPos;
+function loadLeaflet() {
+  return leafletP ||= new Promise((res, rej) => {
+    if (window.L) return res(window.L);
+    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.append(css);
+    const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    s.onload = () => res(window.L); s.onerror = () => { leafletP = null; rej(new Error('offline')); }; document.head.append(s);
+  });
+}
+function stopGeo() { if (geoWatch != null) navigator.geolocation?.clearWatch(geoWatch); geoWatch = null; }
+window.addEventListener('hashchange', () => { if (!location.hash.startsWith('#/canvass')) { stopGeo(); map = null; } });
+
+VIEWS.canvass = () => {
+  const tab = filt('canvass', 'tab', 'map');
+  const t = today(), td = knockStats(t, t, '');
+  const tabs = tabsHTML('canvass', 'tab', [['map', 'Map'], ['stats', 'Stats'], ['list', `Houses (${db.pins.length})`]], tab);
+  const due = comebacksDue();
+  const headSub = `Today: <b>${td.doors}</b> doors · <b>${td.sale}</b> sales · <b>${td.quote}</b> quotes · <b>${td.comeback}</b> come-backs`;
+  if (tab === 'stats') return head('Door knocking', '', headSub) + `<div class="card">${tabs}${canvassStatsHTML()}</div>`;
+  if (tab === 'list') return head('Door knocking', '', headSub) + `<div class="card">${tabs}${canvassListHTML()}</div>`;
+  const show = filt('canvass', 'show', 'all');
+  return head('Door knocking', '', headSub) + `<div class="card canvass-card">${tabs}
+    <div class="canvass-filters">${[['all', 'All'], ...KNOCK_ORDER.map(k => [k, KNOCK[k].short])].map(([k, l]) =>
+      `<button class="chip-btn ${show === k ? 'active' : ''}" data-tab="canvass:show:${k}">${k === 'all' ? '' : knockIcon(k, 16)}${l}</button>`).join('')}
+      <select data-filter="canvass:when" style="width:auto" aria-label="Show pins from">${opts([['all', 'Any time'], ['today', 'Today'], ['week', 'This week'], ['month', 'This month']], filt('canvass', 'when', 'all'))}</select></div>
+    <div class="map-wrap"><div id="canvassMap" class="map"><div class="empty">Loading map…</div></div>
+      <div class="map-tools">
+        <button class="map-btn" data-act="mapLocate" aria-label="Show my location">${icon('route')}</button>
+        <button class="btn btn-primary map-pin-btn" data-act="pinHere">${icon('map')}Pin where I’m standing</button>
+      </div>
+      <div class="map-hint">Tap any house on the map to pin it</div></div>
+    ${due.length ? `<div class="due-list"><h3 class="group-label">Come-backs due (${due.length})</h3>${due.slice(0, 8).map(p => pinRow(p)).join('')}</div>` : ''}
+  </div>`;
+};
+VIEWS.canvass.mount = () => { if (filt('canvass', 'tab', 'map') === 'map') mountMap(); };
+
+function pinRow(p) {
+  const last = (p.history || []).at(-1);
+  return `<div class="list-item clickable" data-act="editPin" data-id="${p.id}">${knockIcon(p.status, 26)}
+    <div class="grow"><div class="title">${esc(p.address || 'Pinned house')}</div>
+    <div class="muted small">${esc(KNOCK[p.status]?.label || '')}${p.name ? ' · ' + esc(p.name) : ''}${p.status === 'comeback' && p.comebackDate ? ` · back ${fmtDateShort(p.comebackDate)}${p.comebackTime ? ' ' + fmtTime(p.comebackTime) : ''}` : ''}${last ? ' · ' + fmtDateShort(last.at.slice(0, 10)) : ''}${p.notes ? ' · ' + esc(p.notes.slice(0, 60)) : ''}</div></div></div>`;
+}
+function canvassListHTML() {
+  const show = filt('canvassList', 'st', ''), q = filt('canvassList', 'q', '').toLowerCase();
+  const list = db.pins.filter(p => (!show || p.status === show) && (!q || `${p.address} ${p.name} ${p.notes} ${p.phone}`.toLowerCase().includes(q)))
+    .sort((a, b) => ((b.history || []).at(-1)?.at || '').localeCompare((a.history || []).at(-1)?.at || ''));
+  return `<div class="toolbar"><input type="search" placeholder="Search address, name, notes…" value="${esc(q)}" data-filter="canvassList:q">
+    <select data-filter="canvassList:st" style="width:auto" aria-label="Outcome">${opts([['', 'All outcomes'], ...KNOCK_ORDER.map(k => [k, KNOCK[k].label])], show)}</select></div>
+    ${list.length ? list.slice(0, 300).map(pinRow).join('') : empty('map', 'No houses pinned yet. Open the map and tap a house to pin it.')}`;
+}
+function statRange(period, offset) {
+  const t = today();
+  if (period === 'day') { const d = addDays(t, offset); return [d, d, fmtDateShort(d)]; }
+  if (period === 'week') { const s = addDays(addDays(t, -parseD(t).getDay()), offset * 7), e = addDays(s, 6); return [s, e, `${fmtDateShort(s)} – ${fmtDateShort(e)}`]; }
+  if (period === 'month') { const s = addMonths(monthStart(t), offset); return [s, monthEnd(s), parseD(s).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })]; }
+  const y = +t.slice(0, 4) + offset; return [`${y}-01-01`, `${y}-12-31`, String(y)];
+}
+function canvassStatsHTML() {
+  const period = filt('canvassStats', 'period', 'day'), offset = +filt('canvassStats', 'offset', 0), rep = filt('canvassStats', 'rep', '');
+  const [from, to, label] = statRange(period, offset), st = knockStats(from, to, rep);
+  const pct = (a, b) => (b ? Math.round(a / b * 100) + '%' : '—');
+  const reps = [...new Set(db.pins.flatMap(p => (p.history || []).map(h => h.rep)).filter(Boolean))];
+  // bars: hours for a day, days for week/month, months for a year
+  let buckets = [];
+  if (period === 'day') buckets = Array.from({ length: 14 }, (_, i) => i + 8).map(h => ({ label: `${(h % 12) || 12}${h < 12 ? 'a' : 'p'}`, test: e => +e.at.slice(11, 13) === h }));
+  else if (period === 'year') buckets = Array.from({ length: 12 }, (_, i) => ({ label: parseD(`${from.slice(0, 4)}-${pad(i + 1)}-01`).toLocaleDateString(undefined, { month: 'short' }), test: e => +e.at.slice(5, 7) === i + 1 }));
+  else { for (let d = from; d <= to; d = addDays(d, 1)) { const dd = d; buckets.push({ label: period === 'week' ? parseD(dd).toLocaleDateString(undefined, { weekday: 'short' }) : String(+dd.slice(8)), test: e => e.at.slice(0, 10) === dd }); } }
+  const rows = buckets.map(b => { const ev = st.ev.filter(b.test); return { label: b.label, doors: ev.length, sales: ev.filter(e => e.status === 'sale').length }; });
+  const tiles = [['Doors knocked', st.doors, `${st.answered} answered · ${st.nothome} not home`], ['Sales', st.sale, `${pct(st.sale, st.doors)} of doors · ${pct(st.sale, st.answered)} of answered`],
+    ['Quotes', st.quote, pct(st.quote, st.doors) + ' of doors'], ['Come-backs', st.comeback, `${comebacksDue().length} due now`], ['Not interested', st.no, pct(st.no, st.answered) + ' of answered']];
+  return `<div class="cal-head">
+      <div class="seg">${[['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['year', 'Year']].map(([k, l]) => `<button data-act="statPeriod" data-v="${k}" class="${period === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <div class="row" style="flex-wrap:nowrap"><button class="btn btn-sm" data-act="statMove" data-n="-1" aria-label="Previous">‹</button><h2 class="cal-title">${esc(label)}</h2>
+        <button class="btn btn-sm" data-act="statMove" data-n="1" aria-label="Next" ${offset >= 0 ? 'disabled' : ''}>›</button></div>
+      <span class="spacer"></span>
+      ${reps.length > 1 ? `<select data-filter="canvassStats:rep" style="width:auto" aria-label="Rep">${opts([['', 'Everyone'], ...reps.map(r => [r, r])], rep)}</select>` : ''}
+    </div>
+    <div class="knock-tiles">${tiles.map(([l, v, sub], i) => `<div class="knock-tile">${knockIcon([null, 'sale', 'quote', 'comeback', 'no'][i] || 'nothome', 22).replace('#64748b', 'var(--primary)')}
+      <div><div class="muted small">${l}</div><div class="value">${v}</div><div class="muted small">${sub}</div></div></div>`).join('')}</div>
+    <h3 class="group-label">Doors knocked ${period === 'day' ? 'by hour' : period === 'year' ? 'by month' : 'by day'}</h3>
+    ${knockBars(rows)}
+    ${reps.length > 1 ? `<h3 class="group-label">By rep</h3><div class="table-wrap"><table><thead><tr><th>Rep</th><th class="num">Doors</th><th class="num">Sales</th><th class="num">Quotes</th><th class="num">Come-backs</th><th class="num">Close rate</th></tr></thead><tbody>
+      ${reps.map(r => { const x = knockStats(from, to, r); return `<tr><td>${esc(r)}</td><td class="num">${x.doors}</td><td class="num">${x.sale}</td><td class="num">${x.quote}</td><td class="num">${x.comeback}</td><td class="num">${pct(x.sale, x.answered)}</td></tr>`; }).join('')}</tbody></table></div>` : ''}`;
+}
+function knockBars(rows) {
+  const W = 640, H = 170, pl = 30, pb = 22, pt = 8, max = Math.max(4, ...rows.map(r => r.doors));
+  const step = max <= 10 ? 2 : max <= 40 ? 10 : Math.ceil(max / 4 / 10) * 10, top = Math.ceil(max / step) * step;
+  const cw = (W - pl) / rows.length, bw = Math.max(3, Math.min(26, cw - 6)), y = v => pt + (H - pt - pb) * (1 - v / top);
+  let g = '';
+  for (let v = 0; v <= top; v += step) g += `<line class="gridline" x1="${pl}" x2="${W}" y1="${y(v)}" y2="${y(v)}"/><text class="axis-label" x="${pl - 6}" y="${y(v) + 4}" text-anchor="end">${v}</text>`;
+  rows.forEach((r, i) => {
+    const x = pl + i * cw + (cw - bw) / 2;
+    g += `<path d="${barPath(x, y(r.doors), bw, y(0) - y(r.doors))}" fill="var(--series-1)"/>`;
+    if (rows.length <= 16 || i % 2 === 0) g += `<text class="axis-label" x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${esc(r.label)}</text>`;
+    g += `<rect x="${pl + i * cw}" y="${pt}" width="${cw}" height="${H - pt - pb}" fill="transparent" data-tip="${esc(`<b>${r.label}</b><br>${r.doors} doors · ${r.sales} sales`)}"/>`;
+  });
+  return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Doors knocked">${g}</svg></div>`;
+}
+
+async function mountMap() {
+  const el = $('#canvassMap'); if (!el) return;
+  let L;
+  try { L = await loadLeaflet(); } catch { el.innerHTML = empty('map', 'The map needs an internet connection. Use “Pin where I’m standing” and your pins will show on the map when you are back online.'); return; }
+  if (!document.body.contains(el)) return;
+  el.innerHTML = '';
+  const lastPin = db.pins.at(-1);
+  const center = state.mapView?.c || (lastPin ? [lastPin.lat, lastPin.lng] : (db.settings.mapCenter || '43.70,-79.42').split(',').map(Number));
+  map = L.map(el, { zoomControl: true, tap: true }).setView(center, state.mapView?.z || (lastPin ? 17 : 15));
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
+  pinLayer = L.layerGroup().addTo(map);
+  const thisMap = map; // events can fire after we leave the page; use this instance, not the global
+  thisMap.on('moveend', () => { const c = thisMap.getCenter(); state.mapView = { c: [c.lat, c.lng], z: thisMap.getZoom() }; });
+  map.on('click', e => pinForm(null, { lat: e.latlng.lat, lng: e.latlng.lng }));
+  drawPins();
+  startGeo(!state.mapView && !lastPin);
+}
+function drawPins() {
+  if (!map || !window.L) return;
+  pinLayer.clearLayers();
+  const show = filt('canvass', 'show', 'all'), when = filt('canvass', 'when', 'all');
+  const from = { today: today(), week: addDays(today(), -parseD(today()).getDay()), month: monthStart(today()) }[when] || '';
+  for (const p of db.pins) {
+    if (show !== 'all' && p.status !== show) continue;
+    if (from && ((p.history || []).at(-1)?.at || '').slice(0, 10) < from) continue;
+    const m = L.marker([p.lat, p.lng], { icon: L.divIcon({ className: 'knock-pin', html: knockIcon(p.status, 30), iconSize: [30, 30], iconAnchor: [15, 15] }), title: p.address || '' });
+    m.on('click', e => { L.DomEvent.stopPropagation(e); pinForm(p); });
+    pinLayer.addLayer(m);
+  }
+}
+function startGeo(center) {
+  if (!navigator.geolocation || geoWatch != null) return;
+  geoWatch = navigator.geolocation.watchPosition(pos => {
+    lastPos = [pos.coords.latitude, pos.coords.longitude];
+    if (!map) return;
+    if (!meMarker || !map.hasLayer(meMarker)) meMarker = L.circleMarker(lastPos, { radius: 8, color: '#fff', weight: 3, fillColor: '#1d6fd8', fillOpacity: 1 }).addTo(map);
+    else meMarker.setLatLng(lastPos);
+    if (center) { map.setView(lastPos, 17); center = false; }
+  }, () => {}, { enableHighAccuracy: true, maximumAge: 15000 });
+}
+function currentPosition() {
+  return new Promise((res, rej) => {
+    if (lastPos) return res(lastPos);
+    if (!navigator.geolocation) return rej(new Error('no gps'));
+    navigator.geolocation.getCurrentPosition(p => res([p.coords.latitude, p.coords.longitude]), rej, { enableHighAccuracy: true, timeout: 12000 });
+  });
+}
+async function reverseAddress(lat, lng) {
+  try {
+    const r = await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}&limit=1&layer=house&lang=en`).then(x => x.json());
+    const p = r.features?.[0]?.properties; return p ? formatAddress(p) : '';
+  } catch { return ''; }
+}
+function canvassRefresh() {
+  if (location.hash.startsWith('#/canvass') && map && filt('canvass', 'tab', 'map') === 'map') {
+    drawPins();
+    const t = today(), td = knockStats(t, t, '');
+    const sub = $('.page-head .muted.small'); if (sub) sub.innerHTML = `Today: <b>${td.doors}</b> doors · <b>${td.sale}</b> sales · <b>${td.quote}</b> quotes · <b>${td.comeback}</b> come-backs`;
+    const due = comebacksDue(), box = $('.due-list');
+    const html = due.length ? `<h3 class="group-label">Come-backs due (${due.length})</h3>${due.slice(0, 8).map(pinRow).join('')}` : '';
+    if (box) box.innerHTML = html; else if (html) $('.canvass-card').insertAdjacentHTML('beforeend', `<div class="due-list">${html}</div>`);
+    renderChrome();
+  } else render();
+}
+
+function pinForm(p, at) {
+  const isNew = !p; p ||= { lat: at.lat, lng: at.lng, status: '', address: '' };
+  const hist = (p.history || []).slice().reverse();
+  modal({ title: isNew ? 'Pin this house' : 'House', submitLabel: 'Save', focus: false, body: `
+    ${field('Address', addrInput('address', p.address, isNew ? 'placeholder="Finding address…"' : ''))}
+    <div class="field" style="margin-top:12px"><label>What happened?</label>
+      <div class="knock-picker">${KNOCK_ORDER.map(k => `<label class="knock-opt"><input type="radio" name="status" value="${k}" ${p.status === k ? 'checked' : ''} required>
+        <span>${knockIcon(k, 34)}<b>${KNOCK[k].short}</b></span></label>`).join('')}</div></div>
+    <div class="form-grid js-comeback ${p.status === 'comeback' ? '' : 'hidden'}" style="margin-top:12px">
+      ${field('Come back on', inp('comebackDate', p.comebackDate || addDays(today(), 1), 'type="date"'))}${field('Time (optional)', inp('comebackTime', p.comebackTime, 'type="time"'))}</div>
+    <div class="form-grid" style="margin-top:12px">
+      ${field('Name', inp('name', p.name, 'placeholder="Homeowner name"'))}${field('Phone', inp('phone', p.phone, 'type="tel"'))}
+      ${field('Notes', `<textarea name="notes" rows="3" placeholder="What did they say? Dog, gate, best time to come back…">${esc(p.notes)}</textarea>`, 'full')}
+    </div>
+    ${!isNew ? `<div class="row" style="margin-top:12px">
+      ${p.customerId && cust(p.customerId) ? `<a class="btn btn-sm" href="#/customers/${p.customerId}">${icon('users')}Customer</a>` : ''}
+      <button type="button" class="btn btn-sm js-pin-act" data-do="quote">${icon('quote')}Create quote</button>
+      <button type="button" class="btn btn-sm js-pin-act" data-do="job">${icon('calendar')}Book job</button>
+      <button type="button" class="btn btn-sm js-pin-act" data-do="plan">${icon('repeat')}Service plan</button>
+      ${!p.leadId ? `<button type="button" class="btn btn-sm js-pin-act" data-do="lead">${icon('funnel')}Add to leads</button>` : ''}
+      <a class="btn btn-sm" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}">${icon('route')}Directions</a></div>` : ''}
+    ${hist.length ? `<h3 class="group-label">Knock history</h3>${hist.map(h => `<div class="hist-row">${knockIcon(h.status, 18)}<span>${esc(KNOCK[h.status]?.label || h.status)}</span><span class="muted small">${fmtDateShort(h.at.slice(0, 10))} ${fmtClock(h.at)}${h.rep ? ' · ' + esc(h.rep) : ''}</span></div>`).join('')}` : ''}`,
+    footExtra: isNew ? '' : `<button type="button" class="btn btn-danger js-del">Delete pin</button>`,
+    onMount: (f, close) => {
+      const sync = () => $('.js-comeback', f).classList.toggle('hidden', f.status.value !== 'comeback');
+      f.addEventListener('change', e => { if (e.target.name === 'status') sync(); });
+      if (isNew && !p.address) reverseAddress(p.lat, p.lng).then(a => { if (a && !f.address.value) f.address.value = a; f.address.placeholder = 'Address'; });
+      $('.js-del', f)?.addEventListener('click', () => { const snap = snapshot(); db.pins = db.pins.filter(x => x.id !== p.id); close(); save(); canvassRefresh(); undoToast(snap, 'Pin deleted'); });
+      $$('.js-pin-act', f).forEach(b => b.addEventListener('click', () => {
+        if (!f.reportValidity()) return;
+        apply(Object.fromEntries(new FormData(f))); close();
+        const c = pinToCustomer(p), what = b.dataset.do;
+        if (what === 'lead') { pinToLead(p); save(); canvassRefresh(); toast('Added to leads'); return; }
+        save();
+        if (what === 'quote') docForm('quote', null, { customerId: c.id, serviceAddress: p.address });
+        if (what === 'job') jobForm(null, { customerId: c.id, address: p.address, date: today() });
+        if (what === 'plan') planForm(null, { customerId: c.id });
+      }));
+    },
+    onSubmit: (f, d) => {
+      apply(d); save(); canvassRefresh();
+      toast(`${KNOCK[p.status].label}${p.address ? ' · ' + p.address.split(',')[0] : ''}`);
+    } });
+  function apply(d) {
+    const changed = d.status !== p.status;
+    Object.assign(p, { address: d.address.trim(), status: d.status, name: d.name.trim(), phone: d.phone, notes: d.notes,
+      comebackDate: d.status === 'comeback' ? d.comebackDate : '', comebackTime: d.status === 'comeback' ? d.comebackTime : '' });
+    if (isNew && !p.id) { p.id = uid(); p.createdAt = today(); p.history = []; db.pins.push(p); }
+    if (changed || isNew && !p.history.length) p.history.push({ at: localStamp(), status: d.status, rep: me()?.name || '' });
+    if (p.leadId) { const l = byId('leads', p.leadId); if (l) Object.assign(l, { name: p.name || l.name, phone: p.phone || l.phone, notes: p.notes, followUp: p.comebackDate || l.followUp }); }
+    if (['quote', 'comeback'].includes(p.status) && !p.leadId && !p.customerId && (p.name || p.phone)) pinToLead(p);
+  }
+}
+function pinToLead(p) {
+  const l = { id: uid(), createdAt: today(), name: p.name || p.address || 'Door knock', phone: p.phone || '', email: '', address: p.address, service: '', value: 0,
+    stage: firstStage(), source: 'Door knocking', followUp: p.comebackDate || addDays(today(), 1), notes: p.notes || '', customerId: p.customerId || '' };
+  db.leads.push(l); p.leadId = l.id; return l;
+}
+function pinToCustomer(p) {
+  let c = p.customerId && cust(p.customerId);
+  if (!c && p.leadId && byId('leads', p.leadId)?.customerId) c = cust(byId('leads', p.leadId).customerId);
+  if (!c) {
+    c = { id: uid(), createdAt: today(), name: p.name || p.address || 'New customer', phone: p.phone || '', email: '', address: p.address || '', source: 'Door knocking', notes: p.notes || '' };
+    db.customers.push(c); toast(`${c.name} added to customers`);
+  }
+  p.customerId = c.id;
+  if (p.leadId) { const l = byId('leads', p.leadId); if (l) l.customerId = c.id; }
+  return c;
+}
+
 /* ---------- Customers ---------- */
 VIEWS.customers = id => {
   if (id) return customerDetail(id);
@@ -1316,16 +2131,20 @@ function customerDetail(id) {
   const tasks = db.tasks.filter(x => x.customerId === id).sort((a, b) => (a.done - b.done) || taskSort(a, b));
   const nextJob = jobs.filter(j => j.date >= today() && j.status === 'scheduled').sort((a, b) => a.date.localeCompare(b.date))[0];
   const tab = filt('customer', 'tab', 'activity');
+  const plans = db.subscriptions.filter(p => p.customerId === id).reverse();
   const lists = {
     activity: activityHTML(c),
     jobs: jobs.length ? jobs.map(jobListItem).join('') : empty('jobs', 'No jobs yet.'),
     quotes: quotes.length ? quotes.map(q => `<a class="list-item" style="color:inherit" href="#/quotes/${q.id}"><div class="grow"><div class="title">${esc(q.number)}</div><div class="muted small">${fmtDate(q.date)}</div></div><span class="num">${money(totals(q).total)}</span>${badge(quoteStatus(q))}</a>`).join('') : empty('quote', 'No quotes yet.'),
     invoices: invs.length ? invs.map(i => `<a class="list-item" style="color:inherit" href="#/invoices/${i.id}"><div class="grow"><div class="title">${esc(i.number)}</div><div class="muted small">${fmtDate(i.date)}</div></div><span class="num">${money(totals(i).total)}</span>${badge(invStatus(i))}</a>`).join('') : empty('invoice', 'No invoices yet.'),
     tasks: quickTaskForm(id) + (tasks.length ? tasks.map(taskRow).join('') : '<p class="muted small">No to-dos for this customer.</p>'),
+    plans: plans.length ? plans.map(p => `<a class="list-item" style="color:inherit" href="#/plans/${p.id}"><div class="grow"><div class="title">${esc(p.name)}</div><div class="muted small">${esc(p.number)} · ${esc(planPriceLabel(p))}</div></div>${badge(planStatus(p))}</a>`).join('')
+      : empty('repeat', 'No service plans yet.', btn('New service plan', 'newPlan', 'btn-sm', `data-cust="${id}"`)),
   };
   return head(esc(c.name), btn('Job', 'newJob', '', `data-cust="${id}"`, 'plus') + btn('Quote', 'newQuote', 'btn-primary', `data-cust="${id}"`, 'plus') +
     moreMenu([menuItem('Edit customer', 'editCustomer', `data-id="${id}"`, 'edit'), menuItem('New invoice', 'newInvoice', `data-cust="${id}"`, 'invoice'),
-      menuItem('Add to-do', 'newTask', `data-cust="${id}"`, 'todo'), s.owing && menuLink('Print statement', `#/statement/${id}`, 'statement'),
+      menuItem('Add to-do', 'newTask', `data-cust="${id}"`, 'todo'), menuItem('New service plan', 'newPlan', `data-cust="${id}"`, 'repeat'),
+      menuItem('Add card on file', 'newCard', `data-id="${id}"`, 'expense'), s.owing && menuLink('Print statement', `#/statement/${id}`, 'statement'),
       menuItem('Delete customer', 'deleteCustomer', `data-id="${id}"`, 'trash', 'danger')]), '<a href="#/customers">← All customers</a>') + `
   <div class="grid grid-3">
     <div class="card"><h2 style="margin-bottom:8px">Contact</h2>
@@ -1333,14 +2152,15 @@ function customerDetail(id) {
       ${c.tags || c.source ? `<div>${[c.source, ...(c.tags || '').split(',')].map(x => (x || '').trim()).filter(Boolean).map(x => `<span class="badge">${esc(x)}</span>`).join(' ')}</div>` : ''}
       ${c.notes ? `<div class="muted small" style="white-space:pre-wrap">${esc(c.notes)}</div>` : ''}
       ${!c.phone && !c.email && !c.address ? '<p class="muted small">No contact details yet.</p>' : ''}</div>
-      <div class="row" style="margin-top:12px">${contactBtns(c)}</div></div>
+      <div class="row" style="margin-top:12px">${contactBtns(c)}</div>
+      <h3 class="group-label" id="cards" style="margin-top:16px">Cards on file</h3>${cardsHTML(c)}</div>
     <div class="card stat"><div class="label">Lifetime revenue</div><div class="value">${money(s.paid)}</div>
       <div class="sub">${jobs.filter(j => j.status === 'completed').length} completed jobs${nextJob ? ` · next visit ${fmtDateShort(nextJob.date)}` : ''}</div></div>
     <div class="card stat"><div class="label">Currently owing</div><div class="value" style="color:${s.owing ? 'var(--bad)' : 'inherit'}">${money(s.owing)}</div>
       <div class="sub">Customer since ${fmtDate(c.createdAt)}</div>
       ${s.owing ? `<a class="btn btn-sm" style="margin-top:10px" href="#/statement/${id}">${icon('statement')}Statement</a>` : ''}</div>
   </div>
-  <div class="card">${tabsHTML('customer', 'tab', [['activity', 'Activity'], ['jobs', `Jobs (${jobs.length})`], ['quotes', `Quotes (${quotes.length})`], ['invoices', `Invoices (${invs.length})`], ['tasks', `To-dos (${tasks.filter(x => !x.done).length})`]], tab)}${lists[tab]}</div>
+  <div class="card">${tabsHTML('customer', 'tab', [['activity', 'Activity'], ['jobs', `Jobs (${jobs.length})`], ['quotes', `Quotes (${quotes.length})`], ['plans', `Plans (${plans.length})`], ['invoices', `Invoices (${invs.length})`], ['tasks', `To-dos (${tasks.filter(x => !x.done).length})`]], tab)}${lists[tab]}</div>
 `;
 }
 
@@ -1473,7 +2293,8 @@ function docView(type, id) {
   const remind = a('Send reminder', 'docRemind', '', 'sms');
   const depInv = !isInv && d.depositInvoiceId && byId('invoices', d.depositInvoiceId);
   const actions = isInv
-    ? (status === 'void' ? '' : (status !== 'paid' ? a('Record payment', 'recordPayment', 'btn-primary', 'check') : '') +
+    ? (status === 'void' ? '' : (status !== 'paid' && defaultCard(d.customerId) ? a(`Charge ${esc(cardLabel(defaultCard(d.customerId)).replace(/^.* (••••)/, '$1'))}`, 'chargeCard', 'btn-primary', 'expense') : '') +
+      (status !== 'paid' ? a('Record payment', 'recordPayment', defaultCard(d.customerId) ? '' : 'btn-primary', 'check') : '') +
       (status === 'overdue' || status === 'partial' ? remind : status === 'paid' ? '' : send) + a('Print / PDF', 'docPrint', '', 'print'))
     : (['draft', 'sent', 'expired'].includes(status) ? a('Approve', 'quoteApprove', 'btn-primary', 'check') : '') +
       (status === 'approved' ? a('Schedule job', 'quoteToJob', 'btn-primary', 'calendar') + a('Convert to invoice', 'quoteToInvoice', '', 'invoice') : '') +
@@ -1492,6 +2313,7 @@ function docView(type, id) {
       d.jobId && byId('jobs', d.jobId) && menuLink('View job', `#/jobs/${d.jobId}`, 'jobs'),
       !isInv && d.invoiceId && byId('invoices', d.invoiceId) && menuLink('View invoice', `#/invoices/${d.invoiceId}`, 'invoice'),
       isInv && d.quoteId && byId('quotes', d.quoteId) && menuLink('View quote', `#/quotes/${d.quoteId}`, 'quote'),
+      isInv && d.planId && byId('subscriptions', d.planId) && menuLink('View service plan', `#/plans/${d.planId}`, 'repeat'),
       isInv && status !== 'void' && !pays.length && menuItem('Void invoice', 'voidInvoice', `data-id="${id}" data-type="${type}"`, 'alert'),
       menuItem('Delete', 'deleteDoc', `data-id="${id}" data-type="${type}"`, 'trash', 'danger'),
     ])}</div>
@@ -1665,7 +2487,7 @@ VIEWS.settings = () => {
   const used = (() => { try { return (JSON.stringify(db).length / 1024 / 1024).toFixed(2); } catch { return '?'; } })();
   const sec = filt('settings', 'tab', 'business');
   const show = k => `${k === sec ? '' : 'hidden'}" data-sec="${k}`; // all sections stay in the form; tabs only hide them
-  const SECS = [['business', 'Business'], ['money', 'Tax & money'], ['docs', 'Quotes & invoices'], ['messages', 'Messages'], ['lists', 'Pipeline & lists'], ['data', 'Data & backup']];
+  const SECS = [['business', 'Business'], ['money', 'Tax & money'], ['docs', 'Quotes & invoices'], ['plans', 'Plans & payments'], ['messages', 'Messages'], ['lists', 'Pipeline & lists'], ['data', 'Data & backup']];
   return head('Settings') + `<div class="settings-layout">
   <nav class="settings-nav" aria-label="Settings sections">${SECS.map(([k, l]) => `<button type="button" data-settab="${k}" class="${k === sec ? 'active' : ''}">${l}</button>`).join('')}</nav>
   <div>
@@ -1700,6 +2522,23 @@ VIEWS.settings = () => {
     ${field('Default invoice note', `<textarea name="invoiceNotes">${esc(s.invoiceNotes)}</textarea>`, 'full')}
     ${field('Default quote note / terms', `<textarea name="quoteNotes">${esc(s.quoteNotes)}</textarea>`, 'full')}
   </div></div>
+  <div class="card ${show('plans')}"><h2>Payments &amp; cards on file</h2>
+    <p class="muted small">Cards are saved securely in your payment processor. This app keeps only the card type, last 4 digits and expiry, so it never holds full card numbers.</p>
+    <div class="form-grid">
+      ${field('Payment processor', `<select name="processor">${opts(['', ...PROCESSORS].map(x => [x, x || '—']), s.processor)}</select>`)}
+      ${field('Processor dashboard link (to charge cards)', inp('processorUrl', s.processorUrl, 'type="url" placeholder="e.g. https://dashboard.stripe.com/customers"'))}
+      ${field('Secure “add your card” link for customers (optional)', inp('cardSetupLink', s.cardSetupLink, 'type="url" placeholder="A Stripe, Square or Helcim link where customers save their card"'), 'full')}
+    </div></div>
+  <div class="card ${show('plans')}"><h2>Service plan defaults</h2>
+    <div class="form-grid" style="margin-top:12px">
+      ${field('Plan number prefix', inp('planPrefix', s.planPrefix))}${field('Next plan number', inp('nextPlanNo', s.nextPlanNo, 'type="number"'))}
+      ${field('Default term (months)', inp('planTermMonths', s.planTermMonths, 'type="number" min="1"'))}
+      ${field('Minimum visits before free cancellation', inp('planMinVisits', s.planMinVisits, 'type="number" min="0"'))}
+      ${field('Early cancellation fee', inp('cancelFee', s.cancelFee, 'type="number" min="0" step="1"'))}
+      ${field('Default terms &amp; conditions', `<textarea name="planTerms" rows="12">${esc(s.planTerms || BH.DEFAULT_TERMS)}</textarea>`, 'full')}
+    </div>
+    <p class="muted small">Placeholders: <code>{business}</code> <code>{start}</code> <code>{term}</code> <code>{price}</code> <code>{minVisits}</code> <code>{fee}</code> <code>{renew}</code> <code>{customer}</code>.
+      These are sensible starting terms, not legal advice. Have them reviewed for your province, since consumer protection rules can limit cancellation fees.</p></div>
   <div class="card ${show('messages')}"><h2>Message templates</h2>
     <p class="muted small">Used when you text or email customers. Placeholders: <code>{first}</code> <code>{customer}</code> <code>{business}</code> <code>{number}</code> <code>{total}</code>
     <code>{balance}</code> <code>{due}</code> <code>{valid}</code> <code>{items}</code> <code>{date}</code> <code>{time}</code> <code>{pay}</code> <code>{review}</code> <code>{signature}</code></p>
@@ -1753,7 +2592,8 @@ document.addEventListener('submit', e => {
   }
   const cats = (d.categories || '').split('\n').map(x => x.trim()).filter(Boolean);
   delete d.categories;
-  for (const k of ['taxRate', 'dueDays', 'mileageRate', 'nextInvoiceNo', 'nextQuoteNo', 'quoteValidDays', 'monthlyGoal']) if (k in d) d[k] = +d[k] || 0;
+  for (const k of ['taxRate', 'dueDays', 'mileageRate', 'nextInvoiceNo', 'nextQuoteNo', 'quoteValidDays', 'monthlyGoal', 'nextPlanNo', 'planTermMonths', 'planMinVisits', 'cancelFee']) if (k in d) d[k] = +d[k] || 0;
+  if ('planTerms' in d && d.planTerms.trim() === BH.DEFAULT_TERMS.trim()) d.planTerms = '';
   const oldAddress = db.settings.address;
   Object.assign(db.settings, d);
   if (cats.length) db.categories = cats;
@@ -1855,6 +2695,35 @@ function assigneeField(value) {
   return field('Assigned to', `<select name="assignedTo">${opts([['', 'Unassigned'], ...[...names, ...extra].map(n => [n, n])], value || '')}</select>`);
 }
 
+/* The price box mirrors the first line item, so simple jobs never need the line-item editor. */
+function bindJobPrice(f, j) {
+  const priceEl = f.jobPrice, hint = $('.js-price-hint', f), rows = () => $$('.js-items tr', f);
+  let autoDesc = '';
+  const sync = () => {
+    const items = j._getItems(), r = rows();
+    const simple = r.length <= 1 && (items.length === 0 || (items.length === 1 && +items[0].qty === 1));
+    priceEl.disabled = !simple;
+    if (document.activeElement !== priceEl) priceEl.value = items.length ? totals({ items }).sub.toFixed(2) : '';
+    const t = totals({ items, discount: f.discount.value, taxRate: f.taxRate.value });
+    hint.textContent = !simple ? 'Total of the line items below' : t.total ? `${money(t.total)} with ${db.settings.taxName}` : '';
+  };
+  priceEl.addEventListener('input', () => {
+    const tr = rows()[0]; if (!tr) return;
+    const desc = $('[data-k=desc]', tr), pr = $('[data-k=price]', tr);
+    if (!desc.value.trim()) { autoDesc = f.title.value.trim() || 'Job'; desc.value = autoDesc; desc.dispatchEvent(new Event('input', { bubbles: true })); }
+    pr.value = priceEl.value; pr.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  f.title.addEventListener('input', () => {
+    const tr = rows()[0], desc = tr && $('[data-k=desc]', tr);
+    if (desc && autoDesc && desc.value === autoDesc && rows().length === 1) { autoDesc = f.title.value.trim(); desc.value = autoDesc; }
+    const svc = db.services.find(x => x.name === f.title.value.trim());
+    if (svc && !priceEl.disabled && !+priceEl.value) { priceEl.value = svc.price; priceEl.dispatchEvent(new Event('input')); }
+  });
+  $('.js-items', f).addEventListener('input', sync);
+  f.addEventListener('click', e => { if (e.target.closest('.js-add-item,[data-rm],[data-up]')) setTimeout(sync); });
+  f.discount.addEventListener('input', sync); f.taxRate.addEventListener('input', sync);
+  sync();
+}
 function jobForm(j, preset = {}) {
   const isNew = !j; j ||= { status: 'scheduled', date: preset.date || today(), ...preset };
   const c = cust(j.customerId);
@@ -1862,7 +2731,8 @@ function jobForm(j, preset = {}) {
   modal({ title: isNew ? 'New job' : 'Edit job', wide: true, body: `
   <div class="form-section"><div class="form-grid">
     ${field('Customer *', customerSelect(j.customerId), 'full')}
-    ${field('Job title *', inp('title', j.title, 'required placeholder="e.g. Furnace tune-up" list="svcTitles"') + `<datalist id="svcTitles">${db.services.map(x => `<option value="${esc(x.name)}">`).join('')}</datalist>`, 'full')}
+    ${field('Job title *', inp('title', j.title, 'required placeholder="e.g. Furnace tune-up" list="svcTitles"') + `<datalist id="svcTitles">${db.services.map(x => `<option value="${esc(x.name)}">`).join('')}</datalist>`)}
+    ${field('Price (before tax)', `<div class="money-input"><span>${curSymbol()}</span>${inp('jobPrice', '', 'type="number" step="0.01" min="0" inputmode="decimal" placeholder="0.00"')}</div><span class="muted small js-price-hint"></span>`)}
     ${field('Service address', addrInput('address', j.address ?? c?.address ?? ''), 'full')}
   </div></div>
   <div class="form-section"><h3>When &amp; who</h3><div class="form-grid">
@@ -1877,6 +2747,7 @@ function jobForm(j, preset = {}) {
   <details class="form-section" ${(j.items || []).length ? 'open' : ''}><summary><h3>Line items <span class="muted small">(optional, used when you invoice)</span></h3></summary>${itemsEditorHTML(j)}</details>`,
     onMount: f => {
       j._getItems = mountItemsEditor(f, j);
+      bindJobPrice(f, j);
       bindCustomerSelect(f, nc => { if (nc && !f.address.value) f.address.value = nc.address || ''; });
       if (isNew && j.repeat) f.repeat.value = j.repeat;
       if (isNew) bindRepeat(f, () => f.date.value);
@@ -2130,15 +3001,19 @@ function openSearch() {
       ['Customers', db.customers.filter(c => has(c.name, c.phone, c.email, c.address)).map(c => [`#/customers/${c.id}`, c.name, [c.phone, c.address].filter(Boolean).join(' · ')])],
       ['Leads', db.leads.filter(l => has(l.name, l.phone, l.service)).map(l => [`lead:${l.id}`, l.name, `${l.service || ''} · ${l.stage}`])],
       ['Jobs', db.jobs.filter(j => has(j.title, custName(j.customerId), j.address)).sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(j => [`#/jobs/${j.id}`, j.title, `${custName(j.customerId)} · ${j.date ? fmtDate(j.date) : 'no date'}`])],
+      ['Door knocks', db.pins.filter(x => has(x.address, x.name, x.phone, x.notes)).map(x => [`pin:${x.id}`, x.address || x.name || 'Pinned house', `${KNOCK[x.status]?.label || ''}${x.notes ? ' · ' + x.notes.slice(0, 40) : ''}`])],
+      ['Service plans', db.subscriptions.filter(x => has(x.number, x.name, custName(x.customerId))).map(x => [`#/plans/${x.id}`, `${x.number} · ${custName(x.customerId)}`, `${x.name} · ${planStatus(x)}`])],
       ['Quotes', db.quotes.filter(x => has(x.number, custName(x.customerId))).map(x => [`#/quotes/${x.id}`, `${x.number} · ${custName(x.customerId)}`, `${money(totals(x).total)} · ${quoteStatus(x)}`])],
       ['Invoices', db.invoices.filter(x => has(x.number, custName(x.customerId))).map(x => [`#/invoices/${x.id}`, `${x.number} · ${custName(x.customerId)}`, `${money(totals(x).total)} · ${invStatus(x)}`])],
     ].filter(g => g[1].length);
     out.innerHTML = groups.length ? groups.map(([l, items]) => `<h3 class="group-label">${l}</h3>${items.slice(0, 6).map(([href, t, sub]) =>
-      href.startsWith('lead:') ? `<button type="button" class="list-item search-hit" data-lead="${href.slice(5)}"><div class="grow"><div class="title">${esc(t)}</div><div class="muted small">${esc(sub)}</div></div></button>`
+      href.startsWith('pin:') ? `<button type="button" class="list-item search-hit" data-pin="${href.slice(4)}"><div class="grow"><div class="title">${esc(t)}</div><div class="muted small">${esc(sub)}</div></div></button>`
+      : href.startsWith('lead:') ? `<button type="button" class="list-item search-hit" data-lead="${href.slice(5)}"><div class="grow"><div class="title">${esc(t)}</div><div class="muted small">${esc(sub)}</div></div></button>`
         : `<a class="list-item search-hit" href="${href}"><div class="grow"><div class="title">${esc(t)}</div><div class="muted small">${esc(sub)}</div></div></a>`).join('')}`).join('')
       : '<p class="muted small">No matches.</p>';
   };
   input.addEventListener('input', run);
+  out.addEventListener('click', e => { const pp = e.target.closest('[data-pin]'); if (pp) { form.closest('.modal-backdrop').remove(); pinForm(byId('pins', pp.dataset.pin)); return; } });
   out.addEventListener('click', e => { const b = e.target.closest('[data-lead]'); if (b) { form.closest('.modal-backdrop').remove(); leadForm(byId('leads', b.dataset.lead)); } });
   input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('.search-hit', out)?.click(); } });
   run();
@@ -2233,6 +3108,45 @@ const ACTIONS = {
     db.jobs = db.jobs.filter(j => !ids.has(j.id)); refresh(); undoToast(snap, 'Plan stopped');
   },
   newMember: () => memberForm(), editMember: ds => memberForm(byId('team', ds.id)),
+  myClock: ds => {
+    const m = me(); if (!m) return chooseMe(() => ACTIONS.myClock(ds));
+    const e = openEntry(m.id);
+    if (e) { e.out = localStamp(); refresh(); toast(`Clocked out · ${fmtHours(hoursOf(e))}`); return; }
+    const job = ds.job || db.jobs.find(j => j.date === today() && (j.assignedTo || '').toLowerCase() === m.name.toLowerCase() && j.status !== 'completed')?.id || '';
+    db.timeEntries.push({ id: uid(), memberId: m.id, in: localStamp(), out: '', breakMin: 0, jobId: job, approved: false });
+    refresh(); toast(`Clocked in at ${fmtClock(localStamp())}${job ? ' · ' + byId('jobs', job).title : ''}`);
+  },
+  editPin: ds => pinForm(byId('pins', ds.id)),
+  pinHere: async () => {
+    try { const [lat, lng] = await currentPosition(); if (map) map.setView([lat, lng], Math.max(map.getZoom(), 18)); pinForm(null, { lat, lng }); }
+    catch { toast('Allow location for this site to pin where you are, or tap the house on the map.'); }
+  },
+  mapLocate: async () => {
+    try { const pos = await currentPosition(); map?.setView(pos, 18); startGeo(false); }
+    catch { toast('Location is off. Allow location access for this site in your browser settings.'); }
+  },
+  statPeriod: ds => { const f = (state.filters.canvassStats ||= {}); f.period = ds.v; f.offset = 0; render(); },
+  statMove: ds => { const f = (state.filters.canvassStats ||= {}); f.offset = Math.min(0, (+f.offset || 0) + +ds.n); render(); },
+  newPlan: ds => planForm(null, { customerId: ds.cust }), editPlan: ds => planForm(byId('subscriptions', ds.id)),
+  dupPlan: ds => { const o = byId('subscriptions', ds.id); planForm(null, { ...structuredClone(o), customerId: '', id: undefined }); },
+  deletePlan: ds => {
+    const p = byId('subscriptions', ds.id);
+    const fut = planJobs(p).filter(j => j.status === 'scheduled' && j.date >= today());
+    if (!confirm(`Delete ${p.number}?${fut.length ? ` Its ${fut.length} upcoming visit(s) are removed too.` : ''}`)) return;
+    const snap = snapshot(), ids = new Set(fut.map(j => j.id));
+    db.subscriptions = db.subscriptions.filter(x => x.id !== p.id); db.jobs = db.jobs.filter(j => !ids.has(j.id));
+    save(); go('#/plans'); undoToast(snap, `${p.number} deleted`);
+  },
+  signPlan: ds => signPlanInPerson(byId('subscriptions', ds.id)),
+  sendPlan: ds => sendPlan(byId('subscriptions', ds.id)),
+  cancelPlan: ds => cancelPlanForm(byId('subscriptions', ds.id)),
+  renewPlan: ds => { const p = byId('subscriptions', ds.id); renewPlanTerm(p); refresh(); toast(`Renewed until ${fmtDate(p.end)}`); },
+  printPlan: ds => { const p = byId('subscriptions', ds.id), old = document.title; document.title = `Service agreement ${p.number} - ${custName(p.customerId)}`; window.print(); setTimeout(() => { document.title = old; }, 1000); },
+  newTemplate: () => templateForm(), editTemplate: ds => templateForm(byId('planTemplates', ds.id)),
+  planSettings: () => { (state.filters.settings ||= {}).tab = 'plans'; go('#/settings'); },
+  newCard: ds => cardForm(cust(ds.id)), editCard: ds => { const c = cust(ds.id); cardForm(c, (c.cards || []).find(k => k.id === ds.cid)); },
+  goCustomerCards: ds => go('#/customers/' + ds.id),
+  chargeCard: ds => chargeCard(byId('invoices', ds.id)),
   clockIn: ds => {
     const m = byId('team', ds.id); if (openEntry(m.id)) return;
     const job = db.jobs.find(j => j.date === today() && (j.assignedTo || '').toLowerCase() === m.name.toLowerCase() && j.status !== 'completed');
@@ -2614,6 +3528,38 @@ function loadSample() {
     const mike = db.team[1];
     for (let k = -6; k < 0; k++) { const d = addDays(t, k); if (parseD(d).getDay() % 6) db.timeEntries.push({ id: uid(), memberId: mike.id, in: `${d}T08:0${k + 7}`, out: `${d}T16:3${k + 7}`, breakMin: 30, approved: k < -3 }); }
   }
+  if (!db.pins.length) {
+    const streets = [['Maple Cres', 43.6702, -79.4655], ['Lakeview Dr', 43.6718, -79.4631], ['Oak Ave', 43.6689, -79.4609]];
+    const weights = ['nothome', 'nothome', 'no', 'no', 'no', 'comeback', 'quote', 'sale', 'nothome', 'no'];
+    for (let d = -40; d <= 0; d += 1 + Math.floor(rnd() * 3)) {
+      const day = addDays(t, d), n = 6 + Math.floor(rnd() * 14);
+      for (let i = 0; i < n; i++) {
+        const [st, la, lo] = pick(streets), num = 2 + Math.floor(rnd() * 120) * 2, status = pick(weights);
+        const hh = 10 + Math.floor(rnd() * 9), mm = pad(Math.floor(rnd() * 60));
+        db.pins.push({ id: uid(), lat: la + (num - 120) * 0.000012 + (rnd() - .5) * 0.0002, lng: lo + (num - 120) * 0.000035 + (rnd() - .5) * 0.0002,
+          address: `${num} ${st}, Toronto, ON`, status, name: ['sale', 'quote', 'comeback'].includes(status) ? pick(['Jordan', 'Sam Lee', 'Pat Moreau', 'Chris Ng', 'Taylor']) : '',
+          phone: '', notes: status === 'comeback' ? pick(['Asked to come back on the weekend', 'Talk to spouse first', 'Call after 5pm']) : status === 'no' ? pick(['', 'Does it themselves', 'Just had it done']) : '',
+          comebackDate: status === 'comeback' ? addDays(day, 3 + Math.floor(rnd() * 5)) : '', createdAt: day,
+          history: [{ at: `${day}T${pad(hh)}:${mm}`, status, rep: pick(['Alex', 'Alex', 'Mike']) }] });
+      }
+    }
+  }
+  if (!db.planTemplates.length) {
+    const tpl = { id: uid(), name: 'Window cleaning: 2 cleans a year', description: 'Inside and outside, spring and fall', billing: 'per_visit', termMonths: 12, minVisits: 2,
+      cancelFee: 50, autoRenew: true, rule: { freq: 'month', interval: 6 }, items: [{ desc: 'Window cleaning (exterior)', details: 'All exterior windows, screens and sills', qty: 1, price: 240, taxable: true }], discount: 0, taxRate: db.settings.taxRate };
+    db.planTemplates.push(tpl,
+      { id: uid(), name: 'Lawn care: weekly, May to October', billing: 'monthly', termMonths: 6, minVisits: 4, cancelFee: 50, autoRenew: false, rule: { freq: 'week', interval: 1, weekdays: [3] },
+        items: [{ desc: 'Weekly lawn mowing & trimming', details: '', qty: 1, price: 220, taxable: true }], discount: 0, taxRate: db.settings.taxRate });
+    const [c1, c2] = [custs[4], custs[6]];
+    c1.cards = [{ id: uid(), name: c1.name, brand: 'Visa', last4: '4242', exp: `08/${String(+t.slice(2, 4) + 2)}`, processor: 'Stripe', isDefault: true, addedAt: addMonths(t, -2) }];
+    const signed = { ...structuredClone(tpl), id: uid(), templateId: tpl.id, number: nextPlanNumber(), customerId: c1.id, address: c1.address, start: addMonths(t, -2), status: 'draft', createdAt: addMonths(t, -2), assignedTo: 'Mike' };
+    db.subscriptions.push(signed);
+    signed.signature = { name: c1.name, at: `${addMonths(t, -2)}T10:15:00.000Z`, method: 'in_person', hash: 'sample', strokes: [[[20, 150], [40, 90], [60, 160], [80, 70], [100, 150], [120, 110]], [[140, 140], [170, 100], [200, 130], [235, 90]]] };
+    signed.cardId = c1.cards[0].id; signed.status = 'active'; signed.activatedAt = signed.start; signed.seriesId = uid(); signed.end = planEnd(signed);
+    addPlanVisits(signed, signed.start, signed.end);
+    db.jobs.filter(j => j.planId === signed.id && j.date < t).forEach(j => { j.status = 'completed'; j.completedAt = j.date; });
+    db.subscriptions.push({ ...structuredClone(tpl), id: uid(), templateId: tpl.id, number: nextPlanNumber(), customerId: c2.id, address: c2.address, start: addDays(t, 7), status: 'sent', sentAt: addDays(t, -4), createdAt: addDays(t, -4) });
+  }
   const ins = [...db.expenses].reverse().find(e => e.category === 'Insurance');
   if (ins) { ins.recurring = true; ins.recurNext = addMonths(ins.date, 1); }
 }
@@ -2628,6 +3574,7 @@ window.addEventListener('pagehide', () => { try { localStorage.setItem('bizhub.u
 load().then(d => {
   db = d; state.loaded = true;
   processRecurring();
+  processPlans();
   render();
   if (storageMode === 'local') toast('Private browsing detected: data may not be kept. Download backups often.');
 });

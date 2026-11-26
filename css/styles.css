@@ -584,3 +584,136 @@ a.card.stat:hover { border-color: var(--primary); }
   .page-head .actions .menu-wrap:last-child .menu { left: auto; right: 0; }
   .plan-actions { width: 100%; }
 }
+
+/* ============ v4: time clock, service plans, signing, cards ============ */
+.link-btn { background: none; border: none; padding: 0; font: inherit; color: var(--primary); font-weight: 600; cursor: pointer; text-decoration: underline; }
+
+/* Clock */
+.clock-btn {
+  display: flex; align-items: center; gap: 8px; width: 100%; margin: 0 0 6px; padding: 8px 10px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-weight: 600; font-size: .9rem;
+}
+.clock-btn svg { width: 16px; height: 16px; color: var(--text-2); }
+.clock-btn.on { background: var(--good-soft); border-color: transparent; color: var(--good); }
+.clock-btn.on svg { color: var(--good); }
+.clock-btn.on::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--good); animation: pulse 1.6s infinite; order: -1; }
+@keyframes pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .clock-btn.on::before { animation: none; } }
+#mobileClock .clock-btn { margin: 0; width: auto; padding: 6px 10px; font-size: .8rem; }
+.clock-card.on { border-color: var(--good); }
+.clock-big { font-size: 1.6rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.clock-big.muted { font-size: 1.1rem; font-weight: 700; }
+.money-input { display: flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.money-input:focus-within { outline: 2px solid var(--primary); outline-offset: -1px; }
+.money-input span { padding: 0 2px 0 10px; color: var(--text-2); font-weight: 600; }
+.money-input input { border: none; outline: none !important; }
+.money-input input:disabled { background: transparent; color: var(--text-2); }
+
+/* Plans */
+.plan-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+.plan-layout .doc { max-width: none; margin: 0; }
+.plan-layout aside .card + .card { margin-top: 0; }
+.mini-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; color: inherit; font-size: .88rem; border-bottom: 1px solid var(--border); }
+.mini-row:last-child { border-bottom: none; }
+.doc-callout { margin: 16px 0; padding: 10px 12px; border-radius: 8px; background: #fff7e6; border: 1px solid #f5d48a; color: #6b4a00; font-size: 13px; }
+.sig-block { margin-top: 28px; }
+.sig-block svg { display: block; }
+.sig-empty { height: 60px; }
+.sig-line { border-top: 1px solid #111; padding-top: 6px; font-size: 12px; color: #444; max-width: 420px; }
+.sign-review { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.sign-review .doc-callout { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+.sig-box { position: relative; border: 2px dashed var(--border); border-radius: 10px; background: #fff; height: 170px; }
+.sig-box canvas { width: 100%; height: 100%; display: block; border-radius: 8px; cursor: crosshair; }
+.sig-hint { position: absolute; left: 14px; bottom: 10px; color: #9aa4b2; font-size: .85rem; pointer-events: none; }
+.sig-box::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: 34px; border-bottom: 1px solid #d7dde5; pointer-events: none; }
+.cancel-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.cancel-summary div { background: var(--surface-2); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; }
+.cancel-summary span { font-size: .75rem; color: var(--text-2); }
+.steps { padding-left: 20px; margin: 0 0 14px; display: flex; flex-direction: column; gap: 10px; }
+
+/* Cards on file */
+.card-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; }
+.card-row + .card-row { border-top: 1px solid var(--border); }
+.card-chip {
+  width: 44px; height: 30px; border-radius: 6px; background: linear-gradient(135deg, #1e3a8a, #2563eb); color: #fff;
+  font-size: .6rem; font-weight: 800; display: grid; place-items: center; text-transform: uppercase; letter-spacing: .03em; flex-shrink: 0;
+}
+
+/* Customer signing page */
+.sign-page { background: var(--bg); }
+.sign-wrap { max-width: 760px; margin: 0 auto; padding: 24px 16px 60px; }
+.sign-card { padding: 28px; }
+.sign-card section { margin-top: 22px; }
+.sign-card h2 { font-size: 1.05rem; margin-bottom: 8px; }
+.sign-head { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 14px; border-bottom: 2px solid var(--text); margin-bottom: 16px; flex-wrap: wrap; }
+.sign-biz { font-weight: 800; font-size: 1.15rem; }
+.sign-title { font-weight: 800; letter-spacing: .06em; color: var(--primary); }
+.sign-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin-bottom: 12px; }
+.sign-facts div { display: flex; flex-direction: column; }
+.sign-facts span { font-size: .75rem; color: var(--text-2); text-transform: uppercase; letter-spacing: .04em; font-weight: 700; }
+.sign-items { margin: 6px 0 10px; }
+.sign-callout { padding: 10px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); }
+.sign-terms { white-space: pre-wrap; font-size: .9rem; line-height: 1.55; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; max-height: 340px; overflow-y: auto; }
+.sign-done { background: var(--good-soft); border-radius: 12px; padding: 16px; }
+.sign-done h2 { color: var(--good); }
+.sig-print svg { background: #fff; border-radius: 6px; }
+
+@media (max-width: 1000px) { .plan-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .hide-xs { display: none; }
+  .sign-card { padding: 18px; }
+  .sign-facts { grid-template-columns: minmax(0, 1fr); }
+  .cancel-summary { grid-template-columns: minmax(0, 1fr); }
+}
+@media print {
+  .plan-layout { display: block; }
+  .sign-wrap { padding: 0; } .sign-card { box-shadow: none; border: none; }
+  #signForm, .sign-done .row { display: none !important; }
+  .sign-terms { max-height: none; overflow: visible; border: none; padding: 0; background: none; }
+}
+
+/* ============ v5: door knocking ============ */
+.canvass-card { padding-bottom: 12px; }
+.canvass-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.chip-btn {
+  display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px 5px 7px; border-radius: 999px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text-2); font: inherit; font-size: .82rem; font-weight: 600; cursor: pointer;
+}
+.chip-btn:first-child { padding-left: 11px; }
+.chip-btn.active { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+.map-wrap { position: relative; }
+.map { height: calc(100vh - 290px); min-height: 380px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); position: relative; z-index: 0; isolation: isolate; background: var(--surface-2); }
+.map .empty { padding-top: 120px; }
+.map-tools { position: absolute; right: 12px; bottom: 30px; z-index: 5; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.map-btn { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--primary); display: grid; place-items: center; box-shadow: var(--shadow); cursor: pointer; }
+.map-btn svg { width: 20px; height: 20px; }
+.map-pin-btn { box-shadow: 0 6px 18px rgba(0,0,0,.25); padding: 12px 16px; }
+.map-hint { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 5; background: rgba(15,23,42,.75); color: #fff; font-size: .78rem; padding: 4px 10px; border-radius: 999px; pointer-events: none; white-space: nowrap; }
+.knock-pin { background: none; border: none; }
+.knock-pin svg { filter: drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
+.leaflet-container { font: inherit; }
+.due-list { margin-top: 12px; }
+.knock-picker { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.knock-opt { position: relative; }
+.knock-opt input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
+.knock-opt span { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 2px 8px; border: 2px solid var(--border); border-radius: 12px; font-size: .78rem; text-align: center; background: var(--surface); }
+.knock-opt input:checked + span { border-color: var(--primary); background: var(--primary-soft); }
+.knock-opt input:focus-visible + span { outline: 2px solid var(--primary); outline-offset: 2px; }
+.hist-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: .88rem; }
+.hist-row .muted { margin-left: auto; }
+.knock-tiles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 4px 0 8px; }
+.knock-tile { display: flex; gap: 10px; align-items: flex-start; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+.knock-tile svg { flex-shrink: 0; margin-top: 2px; }
+.knock-tile .value { font-size: 1.6rem; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.knock-mini { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.knock-mini div { display: flex; flex-direction: column; font-size: .75rem; }
+.knock-mini b { font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+@media (max-width: 1000px) { .knock-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .map { height: calc(100vh - 330px); min-height: 340px; }
+  .knock-picker { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .map-pin-btn { padding: 12px 14px; }
+}
+.map-hint { left: 58px; right: 10px; transform: none; text-align: center; white-space: normal; width: max-content; max-width: calc(100% - 68px); margin: 0 auto; }
+.sign-head .right { text-align: right; }
+@media (max-width: 760px) { .sign-head .right { text-align: left; } }
