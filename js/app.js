@@ -63,6 +63,7 @@ const I = {
   mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 6-10 7L2 6"/>',
   phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/>',
   sms: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  send: '<path d="M12 19V5M5 12l7-7 7 7"/>',
   map: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
   print: '<path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
   edit: '<path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
@@ -97,6 +98,7 @@ const DEFAULT_SETTINGS = {
   paymentInstructions: 'Payment accepted by e-Transfer, cash, cheque or credit card.',
   invoiceNotes: 'Thank you for your business!',
   quoteNotes: 'This quote is valid for 30 days. Prices include labour and materials listed above.',
+  quoteTerms: 'By approving this quote you agree to the work and prices listed above. Any extra work will be quoted separately before we do it. We take care around your home, but we are not responsible for pre-existing damage, or for damage caused by conditions we could not reasonably see, such as worn seals, loose shingles, rot or faulty fixtures. Payment is due when the work is done, unless a deposit is listed above.',
   mileageRate: 0.72, distanceUnit: 'km', theme: 'auto',
   paymentLink: '', reviewLink: '', monthlyGoal: 0, lastBackup: '',
   planPrefix: 'SP-', nextPlanNo: 1001, planTermMonths: 12, planMinVisits: 2, cancelFee: 50, planTerms: '',
@@ -105,7 +107,7 @@ const DEFAULT_SETTINGS = {
   cleanerPct: 20, salesPct: 25, salesScope: 'first',
   tplInvoice: 'Hi {first}, here is invoice {number} from {business} for {total}, due {due}.\n\n{items}\n\n{pay}\n\nThank you!\n{signature}',
   tplReminder: 'Hi {first}, a friendly reminder that invoice {number} for {balance} was due {due}.\n\n{pay}\n\nIf you have already paid, please ignore this message. Thank you!\n{signature}',
-  tplQuote: 'Hi {first}, thanks for the opportunity! Here is quote {number} from {business} for {total}, valid until {valid}.\n\n{items}\n\nJust reply to let me know if you would like to go ahead and we will get you booked in.\n{signature}',
+  tplQuote: 'Hi {first}, thanks for the opportunity! Here is quote {number} from {business} for {total}, valid until {valid}.\n\nView it and approve online: {link}\n\n{signature}',
   tplQuoteFollow: 'Hi {first}, just following up on quote {number} for {total}. Any questions? Reply any time and we can get you on the schedule.\n{signature}',
   tplAppt: 'Hi {first}, this is {business} confirming your appointment on {date}{time}. See you then!',
   tplOnWay: 'Hi {first}, this is {business}. We are on our way and should arrive in about 20 minutes.',
@@ -121,12 +123,12 @@ const PAY_METHODS = ['e-Transfer', 'Cash', 'Cheque', 'Credit card', 'Debit', 'Ba
 
 function blank() {
   return { settings: { ...DEFAULT_SETTINGS }, categories: [...DEFAULT_CATEGORIES], customers: [], services: [], jobs: [],
-    quotes: [], invoices: [], expenses: [], incomes: [], mileage: [], leads: [], tasks: [], team: [], timeEntries: [], subscriptions: [], planTemplates: [], pins: [] };
+    quotes: [], invoices: [], expenses: [], incomes: [], mileage: [], leads: [], tasks: [], team: [], timeEntries: [], subscriptions: [], planTemplates: [], pins: [], messages: [], blasts: [] };
 }
 function normalize(d) {
   const b = blank();
   const out = { ...b, ...d, settings: { ...b.settings, ...(d.settings || {}) } };
-  for (const k of ['customers', 'services', 'jobs', 'quotes', 'invoices', 'expenses', 'incomes', 'mileage', 'categories', 'leads', 'tasks', 'team', 'timeEntries', 'subscriptions', 'planTemplates', 'pins'])
+  for (const k of ['customers', 'services', 'jobs', 'quotes', 'invoices', 'expenses', 'incomes', 'mileage', 'categories', 'leads', 'tasks', 'team', 'timeEntries', 'subscriptions', 'planTemplates', 'pins', 'messages', 'blasts'])
     if (!Array.isArray(out[k])) out[k] = b[k];
   out.subscriptions.forEach(p => { if (!p.terms && (p.signature || p.status === 'sent')) p.terms = out.settings.planTerms || BH.DEFAULT_TERMS_V1; });
   return out;
@@ -258,12 +260,80 @@ function fillTemplate(key, vars) {
 function custVars(c) { return { customer: c?.name || '', first: firstName(c?.name) }; }
 const safeUrl = u => (/^https?:\/\//i.test(String(u || '').trim()) ? String(u).trim() : '');
 const smsHref = (phone, text) => `sms:${encodeURIComponent(phone || '')}${text ? '?&body=' + encodeURIComponent(text) : ''}`;
+const digits10 = x => String(x || '').replace(/\D/g, '').slice(-10);
+const custByPhone = ph => { const d = digits10(ph); return d.length >= 7 ? db.customers.find(c => digits10(c.phone) === d) : null; };
+const unreadCount = () => db.messages.filter(m => m.dir === 'in' && !m.read).length;
+const threadKey = m => m.customerId || 'p' + digits10(m.phone);
+function logMsg(m) { const x = { id: uid(), at: new Date().toISOString(), ...m }; db.messages.push(x); return x; }
+/** A customer texted your business number (arrives through your server's inbox). */
+function addInboundSms(from, body, at) {
+  const c = custByPhone(from), txt = String(body || '').trim();
+  if (c && /^(stop|stopall|unsubscribe|cancel|end|quit)$/i.test(txt)) c.noPromo = true;
+  if (c && /^(start|unstop)$/i.test(txt)) c.noPromo = false;
+  logMsg({ customerId: c?.id || '', phone: from, dir: 'in', body: txt, via: 'sms', read: false, at: at || new Date().toISOString() });
+  if (c) c.lastContact = today();
+  save();
+  return { name: c?.name || formatPhone(from) };
+}
+/** Send a text. With texting connected it goes from your business number right here;
+ *  otherwise it opens your phone's Messages app with the text ready, and is logged. */
+async function sendText(to, body, extra = {}) {
+  const phone = to.phone, base = { customerId: to.id || '', phone, dir: 'out', body, ...extra };
+  if (!phone) return { ok: false, error: 'No phone number' };
+  if (serverHas('sms')) {
+    let r;
+    try { r = await payApi('/sms', { to: phone, body }); } catch (e) { r = { error: e.message }; }
+    if (r.error) {
+      logMsg({ ...base, via: 'sms', status: 'failed', error: r.error });
+      if (String(r.code) === '21610' && to.id) { to.noPromo = true; } // they replied STOP earlier
+      save(); return { ok: false, error: r.error };
+    }
+    logMsg({ ...base, via: 'sms', status: 'sent' }); save(); return { ok: true };
+  }
+  logMsg({ ...base, via: 'phone', status: 'opened' }); save();
+  location.href = smsHref(phone, body);
+  return { ok: true, viaPhone: true };
+}
+/** Text from anywhere in the app: a quick review sheet when texting is connected, else straight to Messages. */
+function openSms(phone, text) {
+  const c = custByPhone(phone) || { phone };
+  if (!serverHas('sms')) { if (text) logMsg({ customerId: c.id || '', phone, dir: 'out', body: text, via: 'phone', status: 'opened' }); save(); location.href = smsHref(phone, text); return; }
+  composeSheet(c, text);
+}
+function composeSheet(c, text = '') {
+  modal({ title: `Text ${c.name ? firstName(c.name) : formatPhone(c.phone)}`, submitLabel: 'Send', body: `
+    <div class="muted small" style="margin-bottom:8px">To ${esc(c.name || '')} ${esc(formatPhone(c.phone))} · from your business number</div>
+    <textarea name="body" rows="7" required class="js-sms-body">${esc(text)}</textarea><div class="muted small js-sms-count"></div>`,
+    onMount: f => bindSmsCount(f),
+    onSubmit: (f, d) => { sendText(c, d.body.trim()).then(r => { toast(r.ok ? 'Text sent' : 'Not sent: ' + r.error); render(); }); } });
+}
+/** Characters and how many texts (segments) a message takes. */
+function smsSegments(t) {
+  const uni = /[^\x00-\x7F’‘“”–—…]/.test(t), n = [...t].length, one = uni ? 70 : 160, many = uni ? 67 : 153;
+  return n <= one ? 1 : Math.ceil(n / many);
+}
+function bindSmsCount(f) {
+  const ta = $('.js-sms-body', f), out = $('.js-sms-count', f);
+  const upd = () => { const n = [...ta.value].length, seg = smsSegments(ta.value); out.textContent = `${n} characters${seg > 1 ? ` · sends as ${seg} texts` : ''}`; };
+  ta.addEventListener('input', upd); upd();
+}
+// Text links anywhere in the app: log them, or send from the business number when texting is connected.
+document.addEventListener('click', e => {
+  const a = e.target.closest?.('a[href^="sms:"]');
+  if (!a || !state.loaded || a.closest('.js-raw-sms')) return;
+  const [num, q = ''] = a.getAttribute('href').slice(4).split('?');
+  const phone = decodeURIComponent(num), body = new URLSearchParams(q.replace(/^&/, '')).get('body') || '';
+  if (!phone) return;
+  if (serverHas('sms')) { e.preventDefault(); composeSheet(custByPhone(phone) || { phone }, body); return; }
+  if (body) { const c = custByPhone(phone); logMsg({ customerId: c?.id || '', phone, dir: 'out', body, via: 'phone', status: 'opened' }); save(); }
+}, true);
 const mailHref = (email, subject, body) => `mailto:${encodeURIComponent(email || '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
 /* ----- money maths ----- */
 function totals(doc) {
   let sub = 0, taxable = 0;
   for (const it of doc.items || []) {
+    if (it.optional && !it.on) continue; // optional extra the customer hasn't picked
     const line = (+it.qty || 0) * (+it.price || 0);
     sub += line; if (it.taxable !== false) taxable += line;
   }
@@ -274,6 +344,8 @@ function totals(doc) {
   return { sub: round2(sub), disc: round2(disc), tax, rate: rate || 0, total: round2(sub - disc + tax) };
 }
 const paidAmt = inv => sum(inv.payments || [], p => p.amount);
+/** Quote lines the customer actually chose (optional extras only if picked), as plain line items. */
+const chosenItems = items => (items || []).filter(i => !i.optional || i.on).map(({ optional, on, ...i }) => i);
 const balance = inv => inv.void ? 0 : round2(totals(inv).total - paidAmt(inv));
 function invStatus(inv) {
   if (inv.void) return 'void';
@@ -450,7 +522,7 @@ function itemsEditorHTML(doc) {
     </div>
     <div class="totals js-totals"></div>`;
 }
-function mountItemsEditor(form, doc) {
+function mountItemsEditor(form, doc, opt = {}) {
   const blankItem = () => ({ desc: '', qty: 1, price: '', taxable: true });
   const items = (doc.items || []).map(x => ({ ...x }));
   if (!items.length) items.push(blankItem());
@@ -466,7 +538,8 @@ function mountItemsEditor(form, doc) {
   function draw() {
     tb.innerHTML = items.map((it, i) => `<tr data-i="${i}">
       <td><input list="svcList" data-k="desc" value="${esc(it.desc)}" placeholder="Service or product" aria-label="Item">
-        <input class="details" data-k="details" value="${esc(it.details || '')}" placeholder="Details (optional)" aria-label="Item details"></td>
+        <input class="details" data-k="details" value="${esc(it.details || '')}" placeholder="Details (optional)" aria-label="Item details">
+        ${opt.optional ? `<label class="opt-line"><input type="checkbox" data-k="optional" ${it.optional ? 'checked' : ''}> Optional extra · the customer can choose to add it</label>` : ''}</td>
       <td><input class="qty right" type="number" step="any" data-k="qty" value="${esc(it.qty)}"></td>
       <td><input class="price right" type="number" step="0.01" data-k="price" value="${esc(it.price)}" placeholder="0.00"></td>
       <td class="tx"><input type="checkbox" data-k="taxable" ${it.taxable !== false ? 'checked' : ''}></td>
@@ -497,7 +570,8 @@ function mountItemsEditor(form, doc) {
   form.taxRate.addEventListener('input', drawTotals);
   draw();
   return () => items.filter(it => String(it.desc).trim() || +it.price)
-    .map(it => ({ desc: String(it.desc).trim(), details: String(it.details || '').trim(), qty: +it.qty || 0, price: round2(it.price), taxable: it.taxable !== false }));
+    .map(it => ({ desc: String(it.desc).trim(), details: String(it.details || '').trim(), qty: +it.qty || 0, price: round2(it.price), taxable: it.taxable !== false,
+      ...(it.optional ? { optional: true, on: !!it.on } : {}) }));
 }
 
 function itemsTable(doc, { compact = false } = {}) {
@@ -764,13 +838,13 @@ document.addEventListener('mousemove', e => {
  * ===================================================================== */
 const NAV = [
   ['dashboard', 'Dashboard', 'home'],
-  ['label', 'Work'], ['schedule', 'Schedule', 'calendar'], ['jobs', 'Jobs', 'jobs'], ['tasks', 'To-dos', 'todo'],
+  ['label', 'Work'], ['schedule', 'Schedule', 'calendar'], ['jobs', 'Jobs', 'jobs'], ['messages', 'Messages', 'sms'], ['tasks', 'To-dos', 'todo'],
   ['label', 'Sales'], ['canvass', 'Door knocking', 'map'], ['leads', 'Leads', 'funnel'], ['customers', 'Customers', 'users'], ['quotes', 'Quotes', 'quote'], ['plans', 'Service plans', 'repeat'], ['invoices', 'Invoices', 'invoice'],
   ['label', 'Money'], ['income', 'Income', 'income'], ['expenses', 'Expenses', 'expense'], ['reports', 'Reports', 'reports'],
   ['label', 'Business'], ['team', 'Team & time', 'clock'], ['services', 'Price book', 'tag'], ['settings', 'Settings', 'settings'],
 ];
 /* Each section has its own colour, used for its icon tile in the sidebar and the More screen. */
-const TINT = { dashboard: '#007AFF', schedule: '#FF3B30', jobs: '#FF9500', tasks: '#34C759', canvass: '#30B0C7', leads: '#AF52DE',
+const TINT = { dashboard: '#007AFF', schedule: '#FF3B30', jobs: '#FF9500', messages: '#34C759', tasks: '#64D2FF', canvass: '#30B0C7', leads: '#AF52DE',
   customers: '#5856D6', quotes: '#FF9F0A', plans: '#32ADE6', invoices: '#34C759', income: '#30D158', expenses: '#FF453A',
   reports: '#5E5CE6', team: '#FF2D55', services: '#A2845E', settings: '#8E8E93' };
 const SHORT = { canvass: 'Knocking', plans: 'Plans', team: 'Team', services: 'Price book', tasks: 'To-dos' };
@@ -786,8 +860,10 @@ function renderChrome() {
   if (cur === 'signed') cur = 'plans';
   if (cur === 'statement') cur = 'customers';
   const counts = { leads: db.leads.filter(l => l.stage === firstStage()).length,
-    tasks: db.tasks.filter(t => !t.done && t.due && t.due <= today()).length, plans: db.subscriptions.filter(x => x.status === 'sent').length, canvass: comebacksDue().length };
+    tasks: db.tasks.filter(t => !t.done && t.due && t.due <= today()).length, messages: unreadCount(), plans: db.subscriptions.filter(x => x.status === 'sent').length, canvass: comebacksDue().length };
   $('#mobileClock').innerHTML = clockWidget();
+  const ur = unreadCount(), mb = $('#msgBadge');
+  if (mb) { mb.textContent = ur > 9 ? '9+' : ur; mb.hidden = !ur; }
   const [, , detailId] = location.hash.split('/');
   $('#backBtn').hidden = !detailId;
   const parent = NAV.find(n => n[0] === cur);
@@ -824,7 +900,7 @@ function render() {
   document.title = [id ? '' : pageLabel, db.settings.businessName || 'Business Hub'].filter(Boolean).join(' · ');
 }
 const isPhone = () => matchMedia('(max-width: 760px)').matches;
-const FAB_ACT = { dashboard: 'newJob', schedule: 'newJob', jobs: 'newJob', customers: 'newCustomer', quotes: 'newQuote',
+const FAB_ACT = { messages: 'newMessage', dashboard: 'newJob', schedule: 'newJob', jobs: 'newJob', customers: 'newCustomer', quotes: 'newQuote',
   invoices: 'newInvoice', expenses: 'newExpense', income: 'newIncome', services: 'newService', leads: 'newLead', tasks: 'newTask', plans: 'newPlan', team: 'newMember' };
 const fab = name => FAB_ACT[name] ? `<button class="fab no-print" data-act="${FAB_ACT[name]}" aria-label="Add">${icon('plus')}</button>` : '';
 /** iOS large titles: once the big page title scrolls under the bar, show it small in the bar. */
@@ -868,6 +944,9 @@ VIEWS.dashboard = () => {
   const upcoming = db.jobs.filter(j => ['scheduled', 'in_progress'].includes(j.status) && inRange(j.date, t, addDays(t, 7)))
     .sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || '')));
   const todayCount = upcoming.filter(j => j.date === t).length;
+  const toSchedule = db.quotes.filter(q => q.status === 'approved' && q.signature && !q.jobId && !db.jobs.some(j => j.quoteId === q.id));
+  const changeReqs = db.quotes.filter(q => q.changeRequest && ['sent', 'draft'].includes(q.status));
+  const unreadMsgs = db.messages.filter(m => m.dir === 'in' && !m.read).length;
   const staleQuotes = db.quotes.filter(q => q.status === 'sent' && q.sentAt && daysBetween(q.sentAt, t) >= 3 && quoteStatus(q) !== 'expired');
   const uninvoiced = db.jobs.filter(j => j.status === 'completed' && !j.invoiceId && !j.noInvoice);
   const lateJobs = db.jobs.filter(j => j.status === 'scheduled' && j.date && j.date < t);
@@ -918,6 +997,9 @@ VIEWS.dashboard = () => {
     overdue.length && ['bad', 'alert', `${plural(overdue.length, 'overdue invoice')}`, `${money(sum(overdue, balance))} owed. Send a reminder.`, '#/invoices', 'invoices:tab:overdue'],
     newLeads.length && ['info', 'funnel', `${plural(newLeads.length, 'new lead')}`, 'Waiting for you to get in touch', '#/leads'],
     uninvoiced.length && ['warn', 'invoice', `${plural(uninvoiced.length, 'job')} to invoice`, 'Completed but not billed yet', '#/jobs', 'jobs:tab:uninvoiced'],
+    toSchedule.length && ['good', 'check', `${plural(toSchedule.length, 'approved quote')} to schedule`, `${esc(custName(toSchedule[0].customerId))}${toSchedule.length > 1 ? ' and others' : ''} said yes. Book the job.`, `#/quotes/${toSchedule[0].id}`],
+    changeReqs.length && ['warn', 'quote', `${plural(changeReqs.length, 'quote')} with changes requested`, 'The customer asked you to update the quote', `#/quotes/${changeReqs[0].id}`],
+    unreadMsgs && ['info', 'sms', `${plural(unreadMsgs, 'unread text')}`, 'Customers replied to you', '#/messages'],
     staleQuotes.length && ['info', 'quote', `${plural(staleQuotes.length, 'quote')} to follow up`, 'Sent 3+ days ago with no answer', '#/quotes'],
     lateJobs.length && ['warn', 'calendar', `${plural(lateJobs.length, 'past job')} still open`, 'Mark them complete or reschedule', '#/jobs', 'jobs:tab:late'],
     awaitingSig.length && ['info', 'repeat', `${plural(awaitingSig.length, 'plan')} waiting for signature`, 'Sent 3+ days ago. Send a reminder.', '#/plans'],
@@ -1583,7 +1665,7 @@ function cardsHTML(c) {
       : btn('Add card', 'newCard', 'btn-sm', `data-id="${c.id}"`, 'plus')}
     ${!stripeOn() && db.settings.cardSetupLink && c.phone ? `<a class="btn btn-sm" href="${smsHref(c.phone, `Hi ${firstName(c.name)}, you can securely add your card for ${db.settings.businessName || 'us'} here: ${db.settings.cardSetupLink}`)}">${icon('sms')}Text secure card link</a>` : ''}</div>
   ${stripeOn() ? `<button class="link-btn small" style="margin-top:8px" data-act="newCard" data-id="${c.id}">Record a card without Stripe</button>`
-    : `<p class="muted small" style="margin:8px 0 0">Connect Stripe in <a href="#/settings" data-tabset="settings:tab:plans">Settings → Plans &amp; payments</a> to save and charge cards from here.</p>`}`;
+    : `<p class="muted small" style="margin:8px 0 0"><button type="button" class="link-btn" data-act="connectStripe">Connect Stripe</button> to save and charge cards from here.</p>`}`;
 }
 function cardForm(c, k) {
   const isNew = !k; k ||= { name: c.name, brand: 'Visa', processor: db.settings.processor || '', isDefault: !(c.cards || []).length };
@@ -1881,7 +1963,7 @@ async function planSignLink(p) {
   const c = cust(p.customerId) || {}, s = db.settings;
   const base = location.href.split('#')[0].replace(/index\.html$/, '');
   const payload = {
-    id: p.id, n: p.number, h: await BH.fingerprint(planCanonical(p)), r: base,
+    k: 'plan', id: p.id, n: p.number, h: await BH.fingerprint(planCanonical(p)), r: base, s: serverHas('inbox') ? serverBase() : '',
     b: { name: s.businessName || 'Your service provider', phone: s.phone, email: s.email },
     c: { name: c.name, first: firstName(c.name), address: p.address || c.address || '' },
     p: { name: p.name, price: planPriceLabel(p), schedule: planSchedule(p), start: fmtDate(p.start), term: `${+p.termMonths || 12} months${p.autoRenew ? ', renews automatically' : ''}`,
@@ -1900,7 +1982,7 @@ async function sendPlan(p) {
   const msg = `Hi ${firstName(c.name)}, here is your ${p.name} agreement from ${db.settings.businessName || 'us'}. Please review and sign here: ${link}`;
   const mark = () => { p.status = 'sent'; p.sentAt = today(); save(); setTimeout(render, 300); };
   modal({ title: `Send ${p.number} for signature`, noFoot: true, body: `
-    <p class="muted small" style="margin-top:0">${esc(c.name)} opens the link, reads the agreement, signs with their finger and taps <b>Send</b>. You’ll get a link back. Open it here to record the signature and start the plan.</p>
+    <p class="muted small" style="margin-top:0">${esc(c.name)} opens the link, reads the agreement, signs with their finger and taps <b>Send</b>. ${serverHas('inbox') ? 'It comes straight back into this app and the plan starts.' : 'You’ll get a link back. Open it here to record the signature and start the plan.'}</p>
     <div class="stack info-list" style="gap:8px">
       ${c.phone ? `<a class="btn btn-primary js-send" href="${smsHref(c.phone, msg)}">${icon('sms')}Text to ${esc(c.phone)}</a>` : ''}
       ${c.email ? `<a class="btn ${c.phone ? '' : 'btn-primary'} js-send" href="${mailHref(c.email, `Your service agreement ${p.number}`, msg)}">${icon('mail')}Email to ${esc(c.email)}</a>` : ''}
@@ -1919,6 +2001,12 @@ async function receiveSignature(data) {
   $('#main').innerHTML = '<div class="empty">Checking the signature…</div>';
   let r;
   try { r = await BH.unpack(data); } catch { $('#main').innerHTML = empty('alert', 'This signed link could not be read. It may have been cut off. Ask the customer to tap Copy link and send it again.'); return; }
+  if (r.k === 'quote') {
+    const res = await receiveQuote(r);
+    if (res.ok || res.already) { history.replaceState(null, '', '#/quotes/' + r.id); render(); if (res.ok) toast(res.msg); }
+    else $('#main').innerHTML = empty('alert', esc(res.msg), res.id ? `<a class="btn btn-sm" href="#/quotes/${res.id}">Open the quote</a>` : '');
+    return;
+  }
   const p = byId('subscriptions', r.id);
   if (!p) { $('#main').innerHTML = empty('alert', `Agreement ${esc(r.n)} isn’t on this device. Open the link on the phone or computer where you created the plan.`); return; }
   if (p.signature?.at === r.at) { go('#/plans/' + p.id); return; }
@@ -1931,7 +2019,61 @@ async function receiveSignature(data) {
   history.replaceState(null, '', '#/plans/' + p.id);
   activatePlan(p);
 }
-function activatePlan(p) {
+/** A signed plan arriving through the inbox: same checks as the link, without leaving the current screen. */
+async function receivePlanQuiet(r) {
+  const p = byId('subscriptions', r.id);
+  if (!p) return { msg: `Agreement ${r.n} isn’t on this device` };
+  if (p.signature?.at === r.at) return { already: true };
+  const h = await BH.fingerprint(planCanonical(p));
+  if (h !== r.h) return { msg: `${p.number} was changed after it was sent, so the signature wasn’t used. Send it again.` };
+  p.signature = { name: r.name, at: r.at, strokes: r.sig, method: 'remote', hash: h };
+  activatePlan(p, true);
+  return { ok: true, msg: `${r.name} signed ${p.number} · plan started` };
+}
+const quoteCanonical = q => JSON.stringify({ n: q.number, c: q.customerId, d: +q.discount || 0, r: String(q.taxRate ?? ''), dep: +q.depositPct || 0, t: q.terms ?? '',
+  i: (q.items || []).map(i => [i.desc, i.details || '', +i.qty, +i.price, i.taxable !== false, !!i.optional]) });
+async function quoteLink(q) {
+  const c = cust(q.customerId) || {}, s = db.settings, t = totals({ ...q, items: chosenItems(q.items) });
+  if (q.terms === undefined) { q.terms = s.quoteTerms || ''; save(); } // lock the wording the customer approves
+  const payload = { k: 'quote', id: q.id, n: q.number, h: await BH.fingerprint(quoteCanonical(q)), r: appBase(), s: serverHas('inbox') ? serverBase() : '',
+    b: { name: s.businessName || 'Your service provider', phone: s.phone, email: s.email, logo: '' },
+    c: { name: c.name, first: firstName(c.name), address: q.serviceAddress || c.address || '' },
+    q: { items: (q.items || []).map(i => [i.desc, i.details || '', +i.qty, +i.price, i.taxable !== false ? 1 : 0, i.optional ? 1 : 0, i.on ? 1 : 0]),
+      disc: +q.discount || 0, rate: t.rate, taxName: s.taxName, cur: s.currency || 'CAD', loc: { CAD: 'en-CA', USD: 'en-US', GBP: 'en-GB', EUR: 'en-IE', AUD: 'en-AU', NZD: 'en-NZ' }[s.currency || 'CAD'], date: fmtDate(q.date), valid: q.validUntil ? fmtDate(q.validUntil) : '', dep: +q.depositPct || 0, notes: q.notes || '' },
+    t: q.terms || '' };
+  return `${appBase()}sign.html#${await BH.pack(payload)}`;
+}
+/** The customer approved (or asked for changes to) a quote online. */
+async function receiveQuote(r) {
+  const q = byId('quotes', r.id);
+  if (!q) return { msg: `Quote ${r.n} isn’t on this device. Open it on the phone or computer where you made the quote.` };
+  if (r.act !== 'changes' && q.signature?.at === r.at) return { already: true, id: q.id };
+  if (r.act === 'changes' && q.changeRequest?.at === r.at) return { already: true, id: q.id };
+  const h = await BH.fingerprint(quoteCanonical(q));
+  if (h !== r.h) return { id: q.id, msg: `${q.number} was changed after it was sent, so this response doesn’t match it any more. Send the updated quote again.` };
+  const c = cust(q.customerId);
+  if (r.act === 'changes') {
+    q.changeRequest = { name: r.name, msg: String(r.msg || '').slice(0, 1000), at: r.at };
+    db.tasks.push({ id: uid(), title: `Update quote ${q.number}: ${r.name || c?.name || 'customer'} asked for changes`, due: today(), customerId: q.customerId, done: false, createdAt: today() });
+    if (c) (c.log ||= []).push({ id: uid(), date: today(), text: `Asked for changes to quote ${q.number}: “${q.changeRequest.msg}”` });
+    save(); return { ok: true, id: q.id, msg: `${r.name || 'Customer'} asked for changes to ${q.number}` };
+  }
+  const picked = new Set(r.pick || []);
+  q.items.forEach((it, i) => { if (it.optional) it.on = picked.has(i); });
+  q.signature = { name: r.name, at: r.at, strokes: r.sig || [], method: 'online', hash: h };
+  q.status = 'approved'; q.approvedAt = today(); q.sentAt ||= today(); delete q.changeRequest;
+  db.leads.forEach(l => { if (l.quoteId === q.id) { l.stage = 'won'; l.closedAt = today(); } });
+  if (c) (c.log ||= []).push({ id: uid(), date: today(), text: `Approved quote ${q.number} online (${money(totals(q).total)})` });
+  let extra = '';
+  if (depositAmt(q) && !q.depositInvoiceId) {
+    const inv = invoiceFromItems({ customerId: q.customerId, serviceAddress: q.serviceAddress, items: [{ desc: `Deposit (${+q.depositPct}%) for quote ${q.number}`, details: '', qty: 1, price: depositAmt(q), taxable: false }] },
+      { quoteId: q.id, dueDate: today(), isDeposit: true });
+    q.depositInvoiceId = inv.id; extra = ` · deposit invoice ${inv.number} ready to send`;
+  }
+  save();
+  return { ok: true, id: q.id, msg: `${r.name} approved ${q.number} (${money(totals(q).total)})${extra}` };
+}
+function activatePlan(p, quiet = false) {
   const c = cust(p.customerId);
   p.status = 'active'; p.activatedAt = today(); p.end = planEnd(p);
   if (!p.seriesId) p.seriesId = uid();
@@ -1939,7 +2081,8 @@ function activatePlan(p) {
   if (p.billing === 'upfront') billPlan(p, p.start, `${p.name} · ${fmtDate(p.start)} to ${fmtDate(p.end)}`, true);
   if (['monthly', 'yearly'].includes(p.billing)) { p.nextBill = p.start; processPlans(true); }
   (c.log ||= []).push({ id: uid(), date: today(), text: `Signed service agreement ${p.number} (${p.name})` });
-  save(); go('#/plans/' + p.id);
+  save(); if (quiet) return;
+  go('#/plans/' + p.id);
   toast(`${p.number} signed and active · visits scheduled`);
 }
 function addPlanVisits(p, from, to) {
@@ -2128,6 +2271,24 @@ function destroyMap() {
 }
 const COMPASS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 15.5 12h-7z" fill="#e5484d"/><path d="M12 21.5 8.5 12h7z" fill="currentColor" opacity=".45"/></svg>';
 const todayLine = () => { const t = today(), td = knockStats(t, t, ''); return `<span class="muted">Today</span> <b>${td.doors}</b> doors · <b>${td.sale}</b> sales · <b>${td.quote}</b> quotes · <b>${td.comeback}</b> come-backs`; };
+const MAP_WHEN = [['today', 'Today'], ['week', 'Week'], ['month', 'Month'], ['year', 'Year'], ['all', 'All']];
+const mapWhen = () => filt('canvass', 'when', 'today');
+/** First day of the map's time window ('' = all time). */
+function mapFrom(when = mapWhen()) {
+  const t = today();
+  return { today: t, week: addDays(t, -parseD(t).getDay()), month: monthStart(t), year: t.slice(0, 4) + '-01-01' }[when] || '';
+}
+/** Pins shown on the map: knocked in the chosen window, plus any come-back that is due (so none get missed). */
+function mapPins() {
+  const show = filt('canvass', 'show', 'all'), from = mapFrom(), t = today();
+  return db.pins.filter(p => (show === 'all' || p.status === show) &&
+    (!from || ((p.history || []).at(-1)?.at || p.createdAt || '').slice(0, 10) >= from || (p.status === 'comeback' && p.comebackDate && p.comebackDate <= t)));
+}
+function mapLine() {
+  const when = mapWhen(), t = today(), from = mapFrom(when) || '0000-01-01', st = knockStats(from, t, '');
+  const label = { today: 'Today', week: 'This week', month: 'This month', year: 'This year', all: 'All time' }[when];
+  return `<span class="muted">${label}</span> <b>${st.doors}</b> doors · <b>${st.sale}</b> sales · <b>${st.quote}</b> quotes · <b>${mapPins().length}</b> pins`;
+}
 const dueBtn = () => { const n = comebacksDue().length; return n ? `<button type="button" class="glass map-due" data-act="showDue">${icon('clock')}${n} come-back${n > 1 ? 's' : ''} due</button>` : ''; };
 
 VIEWS.canvass = () => {
@@ -2141,10 +2302,10 @@ VIEWS.canvass = () => {
   return `<div class="map-screen">
     <div id="canvassMap" class="map-full"><div class="map-loading">Loading map…</div></div>
     <div class="map-top">
-      <div class="map-seg glass">${[['map', 'Map'], ['stats', 'Stats'], ['list', 'Houses']].map(([k, l]) => `<button type="button" data-tab="canvass:tab:${k}" class="${k === 'map' ? 'active' : ''}">${l}</button>`).join('')}</div>
-      <div class="map-chips">${[['all', 'All'], ...KNOCK_ORDER.map(k => [k, KNOCK[k].short])].map(([k, l]) =>
-        `<button type="button" class="chip-btn glass ${show === k ? 'active' : ''}" data-act="mapShow" data-v="${k}">${k === 'all' ? '' : knockIcon(k, 16)}${l}</button>`).join('')}
-        <select class="glass js-map-when" aria-label="Show pins from">${opts([['all', 'Any time'], ['today', 'Today'], ['week', 'This week'], ['month', 'This month']], filt('canvass', 'when', 'all'))}</select></div>
+      <div class="map-row"><div class="map-seg glass">${[['map', 'Map'], ['stats', 'Stats'], ['list', 'Houses']].map(([k, l]) => `<button type="button" data-tab="canvass:tab:${k}" class="${k === 'map' ? 'active' : ''}">${l}</button>`).join('')}</div>
+        <select class="glass map-show js-map-show" aria-label="Which pins">${opts([['all', 'All pins'], ...KNOCK_ORDER.map(k => [k, KNOCK[k].short])], show)}</select></div>
+      <div class="map-seg map-when glass" role="group" aria-label="Show pins from">${MAP_WHEN.map(([k, l]) =>
+        `<button type="button" data-act="mapWhen" data-v="${k}" class="${mapWhen() === k ? 'active' : ''}">${l}</button>`).join('')}</div>
     </div>
     <div class="map-ctrls glass">
       <button type="button" data-act="mapStyle" class="js-style" aria-label="${sat ? 'Show street map' : 'Show satellite'}" title="${sat ? 'Street map' : 'Satellite'}">${icon(sat ? 'map' : 'camera')}</button>
@@ -2153,7 +2314,7 @@ VIEWS.canvass = () => {
     </div>
     <div class="map-hint js-map-hint">Tap a house to pin it · Two fingers to rotate</div>
     <div class="map-bottom">
-      <div class="map-stats glass js-map-stats">${todayLine()}</div>
+      <div class="map-stats glass js-map-stats">${mapLine()}</div>
       <div class="map-actions"><span class="js-due">${dueBtn()}</span><button type="button" class="btn btn-primary map-pin-btn" data-act="pinHere">${icon('map')}Pin my spot</button></div>
     </div>
   </div>`;
@@ -2230,11 +2391,10 @@ function dropPin(lat, lng) {
   pinForm(null, { lat, lng });
 }
 function drawPins() {
+  const line = $('.js-map-stats'); if (line) line.innerHTML = mapLine();
   if (!map || !window.maplibregl) return;
   pinMarkers.forEach(mk => mk.remove()); pinMarkers = [];
-  const show = filt('canvass', 'show', 'all'), when = filt('canvass', 'when', 'all');
-  const from = { today: today(), week: addDays(today(), -parseD(today()).getDay()), month: monthStart(today()) }[when] || '';
-  let list = db.pins.filter(p => (show === 'all' || p.status === show) && (!from || ((p.history || []).at(-1)?.at || '').slice(0, 10) >= from));
+  let list = mapPins();
   if (list.length > 400) {
     const bb = map.getBounds(), dy = (bb.getNorth() - bb.getSouth()) * .35, dx = (bb.getEast() - bb.getWest()) * .35;
     list = list.filter(p => p.lat <= bb.getNorth() + dy && p.lat >= bb.getSouth() - dy && p.lng <= bb.getEast() + dx && p.lng >= bb.getWest() - dx).slice(-700);
@@ -2248,8 +2408,8 @@ function drawPins() {
   }
 }
 document.addEventListener('change', e => {
-  if (!e.target.classList?.contains('js-map-when')) return;
-  (state.filters.canvass ||= {}).when = e.target.value; drawPins();
+  if (!e.target.classList?.contains('js-map-show')) return;
+  (state.filters.canvass ||= {}).show = e.target.value; drawPins();
 });
 function showDueList() {
   const due = comebacksDue();
@@ -2336,7 +2496,7 @@ async function reverseAddress(lat, lng) {
 function canvassRefresh() {
   if (location.hash.startsWith('#/canvass') && map && filt('canvass', 'tab', 'map') === 'map') {
     drawPins();
-    const st = $('.js-map-stats'); if (st) st.innerHTML = todayLine();
+    const st = $('.js-map-stats'); if (st) st.innerHTML = mapLine();
     const d = $('.js-due'); if (d) d.innerHTML = dueBtn();
     renderChrome();
   } else render();
@@ -2419,6 +2579,36 @@ function pinToCustomer(p) {
  * Stripe — through the business's own payment server (stripe-worker/)
  * ===================================================================== */
 const stripeOn = () => !!(db.settings.stripeUrl && db.settings.stripeToken);
+/** What your server can do (from the last connection test): stripe, sms, inbox. */
+const serverHas = f => !!(stripeOn() && db.settings.stripeStatus?.features?.[f]);
+const serverBase = () => db.settings.stripeUrl.trim().replace(/\/+$/, '');
+let inboxBusy = false;
+async function checkInbox(manual = false) {
+  if (!serverHas('inbox') || inboxBusy) { if (manual && !serverHas('inbox')) toast('Connect your server first: Settings → Plans & payments'); return 0; }
+  inboxBusy = true;
+  const notes = [];
+  try {
+    const r = await payApi('/inbox');
+    const done = [];
+    for (const it of r.items || []) {
+      try {
+        if (it.kind === 'sms') { const m = addInboundSms(it.from, it.body, it.at); if (m) notes.push(`New text from ${m.name}`); }
+        else if (it.kind === 'response' && it.data) {
+          const res = it.data.k === 'quote' ? await receiveQuote(it.data) : await receivePlanQuiet(it.data);
+          if (res.ok) notes.push(res.msg); else if (!res.already) notes.push(res.msg);
+        }
+      } catch { /* one bad item shouldn't block the rest */ }
+      done.push(it.key);
+    }
+    if (done.length) await payApi('/inbox/ack', { keys: done });
+    db.settings.lastInboxCheck = Date.now(); save();
+    if (notes.length) { render(); toast(notes.length === 1 ? notes[0] : `${notes[0]} · and ${notes.length - 1} more`); }
+    else if (manual) toast('Nothing new');
+  } catch (e) { if (manual) toast(e.message); }
+  finally { inboxBusy = false; }
+  return notes.length;
+}
+setInterval(() => { if (document.visibilityState === 'visible' && state.loaded) checkInbox(); }, 60000);
 const BRAND_NAMES = { visa: 'Visa', mastercard: 'Mastercard', amex: 'American Express', discover: 'Discover', interac: 'Interac Debit', jcb: 'JCB', diners: 'Diners Club', unionpay: 'UnionPay' };
 const appBase = () => location.href.split('#')[0].split('?')[0].replace(/index\.html$/, '');
 const doneUrl = kind => `${appBase()}paid.html?t=${kind}&b=${encodeURIComponent(db.settings.businessName || '')}`;
@@ -2589,6 +2779,50 @@ async function autoChargeVisit(j) {
   render();
   toast(r.ok ? `Visit invoiced and ${money(r.amount)} charged to ${cardLabel(card)}` : `Invoice ${inv.number} created, but the charge failed: ${r.error}`);
 }
+/* Repository the "Deploy to Cloudflare" button copies the server from (stripe-worker folder). */
+const SERVER_REPO = 'https://github.com/OnelYonan/1st-github-project/tree/claude/zealous-lovelace-h3cu2y/stripe-worker';
+const SETUP_DOC = 'https://github.com/OnelYonan/1st-github-project/blob/claude/zealous-lovelace-h3cu2y/STRIPE-SETUP.md';
+const newToken = () => btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(24)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+/** Guided Stripe setup: key → one-click server → paste address → connected. */
+function connectStripeWizard() {
+  const s = db.settings;
+  if (!s.stripeToken) { s.stripeToken = newToken(); save(); }
+  const copyBtn = (val, label) => `<button type="button" class="btn btn-sm js-wcopy" data-v="${esc(val)}">${icon('share')}${label}</button>`;
+  modal({ title: 'Connect Stripe', wide: true, submitLabel: 'Connect', focus: false, body: `
+    <p class="muted small" style="margin-top:0">Stripe holds the money and pays it to your bank. A small free server (on Cloudflare) keeps your Stripe key private. It also lets customers approve quotes straight into this app, and can send texts. You set it up once.</p>
+    <ol class="wizard">
+      <li><div class="wz-h">Get your Stripe secret key</div>
+        <div class="muted small">Sign up or log in, stay in <b>Test mode</b> for now, and copy the <b>Secret key</b> (starts with <code>sk_test_</code>). Don’t paste it here: it goes into Cloudflare in step 3.</div>
+        <div class="row"><a class="btn btn-sm" href="https://dashboard.stripe.com/register" target="_blank" rel="noopener">Create Stripe account ↗</a><a class="btn btn-sm" href="https://dashboard.stripe.com/test/apikeys" target="_blank" rel="noopener">Open my API keys ↗</a></div></li>
+      <li><div class="wz-h">Copy your app token</div>
+        <div class="muted small">A private password that lets only this app use your server.</div>
+        <div class="row" style="flex-wrap:nowrap"><input readonly class="mono" value="${esc(s.stripeToken)}" onfocus="this.select()" aria-label="App token">${copyBtn(s.stripeToken, 'Copy')}</div></li>
+      <li><div class="wz-h">Create your server in one tap</div>
+        <div class="muted small">Tap the button and sign in to Cloudflare and GitHub (both free). When it asks:
+          <b>STRIPE_SECRET_KEY</b> → paste your Stripe key · <b>APP_TOKEN</b> → paste the app token · leave everything else. Tap <b>Create and deploy</b>.</div>
+        <div class="row"><a class="btn btn-primary btn-sm" href="https://deploy.workers.cloudflare.com/?url=${encodeURIComponent(SERVER_REPO)}" target="_blank" rel="noopener">${icon('share')}Deploy to Cloudflare ↗</a>
+          <a class="btn btn-sm" href="${SETUP_DOC}#step-2-payment-server-cloudflare-worker" target="_blank" rel="noopener">Set it up by hand instead ↗</a></div></li>
+      <li><div class="wz-h">Paste your server’s address</div>
+        <div class="muted small">When it finishes, Cloudflare shows an address like <code>https://business-hub-server.yourname.workers.dev</code>. Copy it here.</div>
+        <input name="url" type="url" placeholder="https://business-hub-server.yourname.workers.dev" value="${esc(s.stripeUrl)}" required></li>
+    </ol>
+    <div class="js-wz-status"></div>`,
+    onMount: f => $$('.js-wcopy', f).forEach(b => b.addEventListener('click', () => navigator.clipboard?.writeText(b.dataset.v).then(() => toast('Copied'), () => prompt('Copy this:', b.dataset.v)))),
+    onSubmit: (f, d) => {
+      const url = d.url.trim().replace(/\/+$/, '');
+      if (!/^https:\/\//i.test(url) && !/^http:\/\/localhost/.test(url)) { toast('Paste the full address, starting with https://'); return false; }
+      s.stripeUrl = url; s.stripeStatus = null; save(); render(); // keep the Settings page behind in step
+      const st = $('.js-wz-status', f); st.innerHTML = '<div class="alert info">Checking your server…</div>';
+      payApi('/health').then(r => {
+        s.stripeStatus = { ...r, at: Date.now() }; if (r.features?.stripe !== false) s.processor = 'Stripe'; save();
+        f.closest('.modal-backdrop')?.remove(); render();
+        toast(r.mode ? `Connected to Stripe${r.mode === 'test' ? ' (test mode)' : ''} ✓` : 'Server connected ✓');
+      }).catch(e => {
+        st.innerHTML = `<div class="alert bad">${icon('alert')}<span>${esc(e.message)}${/token/i.test(e.message) ? ' Make sure APP_TOKEN in Cloudflare is exactly the token in step 2.' : ''}</span></div>`;
+      });
+      return false;
+    } });
+}
 async function testStripe() {
   const st = $('.js-stripe-status');
   if (st) st.innerHTML = '<span class="muted">Checking…</span>';
@@ -2601,6 +2835,7 @@ async function testStripe() {
 // When you come back to the app (e.g. after the customer finished on Stripe), refresh what's on screen.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !stripeOn() || !state.loaded) return;
+  checkInbox();
   const [, name, id] = location.hash.split('/');
   if (name === 'customers' && id) { const c = cust(id); if (c?.stripeId) syncStripeCards(c).then(n => n && render()).catch(() => {}); }
   if (name === 'invoices' && id) { const inv = byId('invoices', id); if (inv) checkPayLink(inv, true).then(paid => paid && (render(), toast('Paid online ✓'))); }
@@ -2792,6 +3027,7 @@ function customerDetail(id) {
     moreMenu([menuItem('Edit customer', 'editCustomer', `data-id="${id}"`, 'edit'), menuItem('New invoice', 'newInvoice', `data-cust="${id}"`, 'invoice'),
       menuItem('Add to-do', 'newTask', `data-cust="${id}"`, 'todo'), menuItem('New service plan', 'newPlan', `data-cust="${id}"`, 'repeat'),
       menuItem('Add card on file', 'newCard', `data-id="${id}"`, 'expense'), s.owing && menuLink('Print statement', `#/statement/${id}`, 'statement'),
+      menuLink('Messages', `#/messages/${id}`, 'sms'),
       menuItem('Delete customer', 'deleteCustomer', `data-id="${id}"`, 'trash', 'danger')]), '<a class="crumb" href="#/customers">← All customers</a>') + `
   <div class="grid grid-3">
     <div class="card"><h2 style="margin-bottom:8px">Contact</h2>
@@ -2915,7 +3151,7 @@ function docHTML(type, d) {
       <div style="white-space:pre-line;color:#444">${esc([c.address, c.phone, c.email].filter(Boolean).join('\n'))}</div>
       ${d.serviceAddress && d.serviceAddress !== c.address ? `<div style="margin-top:6px"><span class="lbl">Service address:</span> ${esc(d.serviceAddress)}</div>` : ''}</div>
     <table><thead><tr><th>Description</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead><tbody>
-      ${(d.items || []).map(it => `<tr><td>${esc(it.desc)}${it.details ? `<div style="color:#666;font-size:12px;white-space:pre-line">${esc(it.details)}</div>` : ''}</td><td class="num">${+it.qty}</td><td class="num">${money(it.price)}</td><td class="num">${money(it.qty * it.price)}</td></tr>`).join('')}
+      ${(d.items || []).map(it => `<tr class="${it.optional && !it.on ? 'opt-off' : ''}"><td>${esc(it.desc)}${it.details ? `<div style="color:#666;font-size:12px;white-space:pre-line">${esc(it.details)}</div>` : ''}${it.optional ? `<div class="opt-tag">${it.on ? '✓ Optional extra · added' : 'Optional extra · not included'}</div>` : ''}</td><td class="num">${+it.qty}</td><td class="num">${money(it.price)}</td><td class="num">${money(it.qty * it.price)}</td></tr>`).join('')}
     </tbody></table>
     <div class="totals">
       <div><span>Subtotal</span><span>${money(t.sub)}</span></div>
@@ -2928,7 +3164,9 @@ function docHTML(type, d) {
     ${status === 'paid' ? '<div class="paid-stamp">PAID</div>' : ''}
     ${d.notes ? `<div class="notes">${esc(d.notes)}</div>` : ''}
     ${isInv && status !== 'paid' ? payBlock() : ''}
-    ${!isInv ? `<div class="notes" style="margin-top:40px;display:flex;gap:40px;flex-wrap:wrap"><div>Accepted by: ________________________</div><div>Date: ______________</div></div>` : ''}
+    ${!isInv && (d.terms ?? s.quoteTerms) ? `<div class="notes"><b>Terms</b>\n${esc(d.terms ?? s.quoteTerms)}</div>` : ''}
+    ${!isInv ? (d.signature ? `<div class="sig-block">${BH.sigSVG(d.signature.strokes || [])}<div class="sig-line">Approved online by ${esc(d.signature.name)} · ${esc(new Date(d.signature.at).toLocaleString())}</div></div>`
+      : `<div class="notes" style="margin-top:40px;display:flex;gap:40px;flex-wrap:wrap"><div>Accepted by: ________________________</div><div>Date: ______________</div></div>`) : ''}
   </div>`;
 }
 function docMessage(type, d, kind = 'send', payUrl = '') {
@@ -2936,9 +3174,15 @@ function docMessage(type, d, kind = 'send', payUrl = '') {
   const items = (d.items || []).map(it => `• ${it.desc}: ${money(it.qty * it.price)}`).join('\n');
   const vars = { ...custVars(c), number: d.number, total: money(t.total), balance: money(balance(d)), due: d.dueDate ? fmtDate(d.dueDate) : 'on receipt',
     valid: d.validUntil ? fmtDate(d.validUntil) : '30 days', items };
-  if (payUrl) vars.pay = [`Pay securely online: ${payUrl}`, db.settings.paymentInstructions].filter(Boolean).join('\n');
-  if (type === 'invoice') return fillTemplate(kind === 'reminder' ? 'tplReminder' : 'tplInvoice', vars);
-  return fillTemplate(kind === 'followup' ? 'tplQuoteFollow' : 'tplQuote', vars);
+  if (type === 'invoice') {
+    if (payUrl) vars.pay = [`Pay securely online: ${payUrl}`, db.settings.paymentInstructions].filter(Boolean).join('\n');
+    return fillTemplate(kind === 'reminder' ? 'tplReminder' : 'tplInvoice', vars);
+  }
+  const key = kind === 'followup' ? 'tplQuoteFollow' : 'tplQuote';
+  vars.link = payUrl;
+  const msg = fillTemplate(key, vars);
+  // older saved wording has no {link}: add it so the customer can always approve online
+  return payUrl && !msg.includes(payUrl) ? `${msg}\n\nView it and approve online: ${payUrl}` : msg;
 }
 function docView(type, id) {
   const coll = type === 'invoice' ? 'invoices' : 'quotes';
@@ -2967,6 +3211,8 @@ function docView(type, id) {
       isInv && ['overdue', 'partial'].includes(status) && menuItem('Text invoice', 'docText', `data-id="${id}" data-type="${type}"`, 'sms'),
       menuItem('Edit', 'editDoc', `data-id="${id}" data-type="${type}"`, 'edit'),
       menuItem('Duplicate', 'dupDoc', `data-id="${id}" data-type="${type}"`, 'quote'),
+      !isInv && ['draft', 'sent', 'expired'].includes(status) && menuItem('Copy approval link', 'quoteCopyLink', `data-id="${id}"`, 'share'),
+      !isInv && menuItem('Preview what the customer sees', 'quotePreview', `data-id="${id}"`, 'quote'),
       !isInv && ['draft', 'sent', 'expired'].includes(status) && menuItem('Mark declined', 'quoteDecline', `data-id="${id}" data-type="${type}"`, 'alert'),
       d.jobId && byId('jobs', d.jobId) && menuLink('View job', `#/jobs/${d.jobId}`, 'jobs'),
       !isInv && d.invoiceId && byId('invoices', d.invoiceId) && menuLink('View invoice', `#/invoices/${d.invoiceId}`, 'invoice'),
@@ -2978,6 +3224,8 @@ function docView(type, id) {
     ])}</div>
     ${!c.email && !c.phone ? `<div class="alert warn no-print" style="margin:0 auto 12px;max-width:820px">${icon('alert')}<span>This customer has no email or phone saved. <a href="#/customers/${c.id}">Add one</a> to send from here.</span></div>` : ''}
     ${isInv && d.checkout && !d.checkout.paid && !['paid', 'void'].includes(status) ? `<div class="alert info no-print" style="margin:0 auto 12px;max-width:820px">${icon('share')}<span>Pay-online link created ${fmtDate(iso(new Date(d.checkout.at)))}. <button class="link-btn" data-act="checkPaid" data-id="${id}">Check if paid</button></span></div>` : ''}
+    ${!isInv && d.changeRequest && ['sent', 'draft', 'expired'].includes(status) ? `<div class="alert warn no-print" style="margin:0 auto 12px;max-width:820px">${icon('sms')}<span><b>${esc(d.changeRequest.name || 'The customer')} asked for changes</b> (${fmtDate(d.changeRequest.at.slice(0, 10))}): “${esc(d.changeRequest.msg)}”. Edit the quote, then send it again.</span></div>` : ''}
+    ${!isInv && d.signature && status === 'approved' ? `<div class="alert good no-print" style="margin:0 auto 12px;max-width:820px">${icon('check')}<span><b>Approved online</b> by ${esc(d.signature.name)} on ${esc(new Date(d.signature.at).toLocaleString())}${d.items.some(i => i.optional && i.on) ? ` · added ${d.items.filter(i => i.optional && i.on).map(i => esc(i.desc)).join(', ')}` : ''}. Next: schedule the job.</span></div>` : ''}
     ${depInv ? `<div class="alert info no-print" style="margin:0 auto 12px;max-width:820px">${icon('invoice')}<span>Deposit invoice <a href="#/invoices/${depInv.id}">${esc(depInv.number)}</a> · ${badge(invStatus(depInv))}</span></div>` : ''}
     ${docHTML(type, d)}
     ${isInv ? `<div class="card no-print" style="margin-top:16px;max-width:820px;margin-left:auto;margin-right:auto">
@@ -3145,6 +3393,202 @@ VIEWS.services = () => head('Price Book', btn('Add item', 'newService', 'btn-pri
     <td>${esc(s.unit || '')}</td><td>${s.taxable !== false ? 'Yes' : 'No'}</td><td class="num">${money(s.price)}</td></tr>`).join('')}
   </tbody></table></div>` : empty('tag', 'Your price book is empty.', btn('Add your first service', 'newService', 'btn-sm'))}</div>`;
 
+/* ---------- Messages ---------- */
+function msgTime(iso) {
+  const d = new Date(iso), t = today(), ds = localDate(iso);
+  if (ds === t) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (ds === addDays(t, -1)) return 'Yesterday';
+  return daysBetween(ds, t) < 7 ? d.toLocaleDateString(undefined, { weekday: 'short' }) : fmtDateShort(ds);
+}
+function threads() {
+  const map = new Map();
+  for (const m of db.messages) {
+    const k = threadKey(m), x = map.get(k) || { key: k, c: m.customerId ? cust(m.customerId) : null, phone: m.phone, last: m, unread: 0, n: 0 };
+    x.n++; if (m.dir === 'in' && !m.read) x.unread++; if (m.at >= x.last.at) x.last = m;
+    map.set(k, x);
+  }
+  return [...map.values()].sort((a, b) => b.last.at.localeCompare(a.last.at));
+}
+const textingNote = () => serverHas('sms')
+  ? `<span class="badge good">Texting on</span> Texts go from your business number ${esc(formatPhone(db.settings.stripeStatus?.features?.smsFrom || ''))} and replies show up here.`
+  : `Texts open your phone’s Messages app, ready to send, and are saved here. To send and get replies right here, <a href="#/settings" data-tabset="settings:tab:messages">turn on texting</a>.`;
+VIEWS.messages = id => {
+  if (id) return threadView(id);
+  const tab = filt('messages', 'tab', 'chats'), q = filt('messages', 'q', '').toLowerCase();
+  const actions = btn('New message', 'newMessage', 'btn-primary', '', 'plus') + btn('Promo blast', 'newBlast', '', '', 'share') + (serverHas('inbox') ? btn('Check for replies', 'checkInbox', '', '', 'repeat') : '');
+  const tabs = tabsHTML('messages', 'tab', [['chats', 'Conversations'], ['blasts', `Blasts (${db.blasts.length})`]], tab);
+  if (tab === 'blasts') {
+    return head('Messages', actions) + `<div class="card">${tabs}${db.blasts.length ? [...db.blasts].reverse().map(b => {
+      const replies = db.messages.filter(m => m.dir === 'in' && m.at > b.at && b.phones?.includes(digits10(m.phone))).length;
+      return `<div class="list-item"><span class="attn-ic info">${icon('share')}</span><div class="grow"><div class="title">${esc(b.body.slice(0, 70))}${b.body.length > 70 ? '…' : ''}</div>
+        <div class="muted small">${fmtDate(localDate(b.at))} · ${esc(b.audience)} · ${b.via === 'sms' ? `${b.sent} sent${b.failed ? `, ${b.failed} failed` : ''}` : b.via === 'email' ? `${b.sent} emailed` : `${b.sent} texted from your phone`} · ${replies} repl${replies === 1 ? 'y' : 'ies'}</div></div></div>`;
+    }).join('') : empty('share', 'No blasts yet. Send a promotion to all your customers at once.', btn('Create a promo blast', 'newBlast', 'btn-sm btn-primary'))}</div>`;
+  }
+  const list = threads().filter(t => !q || `${t.c?.name || ''} ${t.phone} ${t.last.body}`.toLowerCase().includes(q));
+  return head('Messages', actions, textingNote()) + `<div class="card">${tabs}
+    <div class="toolbar"><input type="search" placeholder="Search messages…" value="${esc(q)}" data-filter="messages:q"></div>
+    ${list.length ? list.map(t => {
+      const name = t.c?.name || formatPhone(t.phone);
+      return `<a class="list-item thread-row ${t.unread ? 'unread' : ''}" href="#/messages/${t.key}" style="color:inherit">
+        <span class="avatar" style="background:${t.c ? TEAM_COLORS[(t.c.name || '').length % TEAM_COLORS.length] : '#8e8e93'}">${esc((name || '?')[0].toUpperCase())}</span>
+        <div class="grow"><div class="row" style="flex-wrap:nowrap;gap:6px"><span class="title" style="flex:1">${esc(name)}</span><span class="muted small">${msgTime(t.last.at)}</span></div>
+        <div class="muted small thread-preview">${t.last.dir === 'out' ? 'You: ' : ''}${esc(t.last.body)}</div></div>${t.unread ? `<span class="unread-dot" aria-label="${t.unread} unread"></span>` : ''}</a>`;
+    }).join('') : empty('sms', 'No messages yet. Texts you send to customers from the app show up here.')}</div>`;
+};
+function threadView(key) {
+  const c = key.startsWith('p') ? custByPhone(key.slice(1)) : cust(key);
+  const phone = c?.phone || key.slice(1);
+  if (c && key.startsWith('p')) db.messages.forEach(m => { if (threadKey(m) === key) m.customerId = c.id; }); // number now belongs to a customer
+  const k = c ? c.id : key;
+  const msgs = db.messages.filter(m => threadKey(m) === k).sort((a, b) => a.at.localeCompare(b.at));
+  let lastDay = '';
+  const bubbles = msgs.map(m => {
+    const day = localDate(m.at), sep = day !== lastDay ? `<div class="chat-day">${day === today() ? 'Today' : fmtDate(day)}</div>` : ''; lastDay = day;
+    return `${sep}<div class="bubble ${m.dir} ${m.status === 'failed' ? 'failed' : ''}"><div class="bubble-text">${esc(m.body)}</div>
+      <div class="bubble-meta">${new Date(m.at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}${m.dir === 'out' ? ` · ${m.status === 'failed' ? `Not delivered: ${esc(m.error || '')}` : m.via === 'phone' ? 'from your phone' : m.via === 'email' ? 'email' : 'sent'}` : ''}${m.blastId ? ' · promo' : ''}</div></div>`;
+  }).join('');
+  const tpls = [['', 'Templates…'], ['tplOnWay', 'On my way'], ['tplAppt', 'Appointment reminder'], ['tplReview', 'Ask for a review'], ['tplQuoteFollow', 'Quote follow-up']];
+  return head(esc(c?.name || formatPhone(phone)), (phone ? `<a class="btn" href="tel:${esc(phone)}">${icon('phone')}Call</a>` : '') + (c ? `<a class="btn" href="#/customers/${c.id}">${icon('users')}Customer</a>` : ''),
+      `${esc(formatPhone(phone))}${c?.noPromo ? ' · <span class="badge warn">No promotions</span>' : ''}`) + `
+    <div class="chat card">${bubbles || '<p class="muted small" style="text-align:center">No messages yet. Say hi 👋</p>'}</div>
+    ${phone ? `<form class="composer js-compose" data-key="${esc(k)}" data-phone="${esc(phone)}">
+      <select class="js-tpl" aria-label="Insert a template">${opts(tpls, '')}</select>
+      <textarea name="body" rows="1" placeholder="Text message" required class="js-sms-body"></textarea>
+      <button class="composer-send" type="submit" aria-label="Send">${icon('send')}</button></form>` : ''}
+    <p class="muted small chat-note">${textingNote()}</p>`;
+}
+VIEWS.messages.mount = id => {
+  if (!id) return null;
+  let changed = false;
+  db.messages.forEach(m => { if (m.dir === 'in' && !m.read && (threadKey(m) === id || m.customerId === id)) { m.read = true; changed = true; } });
+  if (changed) { save(); renderChrome(); }
+  const chat = $('.chat'); if (chat) window.scrollTo(0, document.body.scrollHeight);
+  const ta = $('.js-compose textarea');
+  ta?.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 160) + 'px'; });
+  $('.js-tpl')?.addEventListener('change', e => {
+    const c = cust(id) || custByPhone($('.js-compose').dataset.phone);
+    if (e.target.value) { ta.value = fillTemplate(e.target.value, { ...custVars(c), date: 'your appointment day', time: '' }); ta.dispatchEvent(new Event('input')); ta.focus(); }
+    e.target.value = '';
+  });
+  return null;
+};
+document.addEventListener('submit', async e => {
+  const f = e.target.closest?.('.js-compose'); if (!f) return;
+  e.preventDefault();
+  const body = f.body.value.trim(); if (!body) return;
+  const c = cust(f.dataset.key) || custByPhone(f.dataset.phone) || { phone: f.dataset.phone };
+  f.querySelector('button').disabled = true;
+  const r = await sendText(c, body);
+  if (!r.ok) toast('Not sent: ' + r.error);
+  render();
+});
+
+function newMessageForm(preset = {}) {
+  modal({ title: 'New message', submitLabel: serverHas('sms') ? 'Send' : 'Open Messages', body: `
+    ${field('To', customerSelect(preset.customerId), 'full')}
+    <div class="field" style="margin-top:12px"><label>Message</label><textarea name="body" rows="6" required class="js-sms-body">${esc(preset.body || '')}</textarea><div class="muted small js-sms-count"></div></div>
+    <p class="muted small">${textingNote()}</p>`,
+    onMount: f => { bindCustomerSelect(f); bindSmsCount(f); },
+    onSubmit: (f, d) => {
+      const c = cust(d.customerId);
+      if (!c?.phone) { toast('This customer has no phone number'); return false; }
+      sendText(c, d.body.trim()).then(r => { if (!r.viaPhone) { toast(r.ok ? 'Text sent' : 'Not sent: ' + r.error); go('#/messages/' + c.id); } else setTimeout(() => go('#/messages/' + c.id), 400); });
+    } });
+}
+
+/* ----- promo blasts ----- */
+const AUDIENCES = [['all', 'All customers'], ['plan', 'Customers on a service plan'], ['lapsed', 'Customers you haven’t serviced in 6+ months'],
+  ['recent', 'Customers serviced in the last 12 months'], ['tag', 'Customers with a tag…'], ['leads', 'Open leads (not customers yet)']];
+function blastPeople(aud, tag = '') {
+  const t = today(), sixAgo = addMonths(t, -6), yearAgo = addMonths(t, -12);
+  const lastJob = c => db.jobs.filter(j => j.customerId === c.id && j.status === 'completed').map(j => j.date).sort().at(-1) || '';
+  const upcoming = c => db.jobs.some(j => j.customerId === c.id && j.status === 'scheduled' && j.date >= t);
+  let list;
+  if (aud === 'leads') list = db.leads.filter(l => !['won', 'lost'].includes(l.stage) && l.phone && !custByPhone(l.phone)).map(l => ({ name: l.name, phone: l.phone, email: l.email, leadId: l.id }));
+  else {
+    const ok = {
+      all: () => true, plan: c => db.subscriptions.some(p => p.customerId === c.id && p.status === 'active'),
+      lapsed: c => { const l = lastJob(c); return l && l < sixAgo && !upcoming(c); }, recent: c => lastJob(c) >= yearAgo,
+      tag: c => tag && String(c.tags || '').toLowerCase().split(/[,;]/).map(x => x.trim()).includes(tag.trim().toLowerCase()),
+    }[aud] || (() => true);
+    list = db.customers.filter(ok);
+  }
+  const optedOut = list.filter(c => c.noPromo), reach = list.filter(c => !c.noPromo);
+  return { send: reach.filter(c => c.phone), noPhone: reach.filter(c => !c.phone), optedOut };
+}
+const blastText = (body, c, optOut) =>
+  `${body.replace(/\{first\}/g, firstName(c.name)).replace(/\{business\}/g, db.settings.businessName || 'us')}${optOut ? '\nReply STOP to opt out.' : ''}`;
+function blastForm() {
+  const sms = serverHas('sms');
+  modal({ title: 'Promo blast', wide: true, submitLabel: 'Review', body: `
+    <div class="form-grid">
+      ${field('Send to', `<select name="aud">${opts(AUDIENCES, 'all')}</select>`)}
+      <div class="field js-tagf hidden"><label>Tag</label><input name="tag" placeholder="e.g. residential"></div>
+      <div class="field full"><label>Message <span class="muted">· {first} becomes each customer’s first name</span></label>
+        <textarea name="body" rows="5" required class="js-sms-body">Hi {first}! Spring special from {business}: 15% off window cleaning when you book before the end of the month. Reply YES and we’ll get you on the schedule.</textarea>
+        <div class="muted small js-sms-count"></div></div>
+      <label class="check full"><input type="checkbox" name="optOut" checked> Add “Reply STOP to opt out.” (recommended, and required by Canada’s anti-spam law for promotions)</label>
+      ${sms ? '' : `<div class="field full"><label>How to send</label><select name="how">${opts([['phone', 'Text them one at a time from my phone'], ['email', 'Email everyone (BCC, so no one sees the others)']], 'phone')}</select></div>`}
+    </div>
+    <div class="blast-sum js-bsum"></div>
+    <p class="muted small">Only send promotions to customers who agreed to hear from you. Anyone who replies STOP, or that you mark “Don’t send promotions”, is skipped automatically.${sms ? '' : ' To send all texts at once from your business number, turn on texting in Settings → Messages.'}</p>`,
+    onMount: f => {
+      bindSmsCount(f);
+      const upd = () => {
+        $('.js-tagf', f).classList.toggle('hidden', f.aud.value !== 'tag');
+        const pp = blastPeople(f.aud.value, f.tag.value), how = sms ? 'sms' : f.how.value;
+        const n = how === 'email' ? pp.send.concat(pp.noPhone).filter(c => c.email).length : pp.send.length;
+        const first = pp.send[0] || { name: 'Alex' };
+        $('.js-bsum', f).innerHTML = `<div class="pay-row"><span>Will receive it</span><b>${n} ${n === 1 ? 'person' : 'people'}</b></div>
+          ${pp.optedOut.length ? `<div class="pay-row"><span>Skipped: asked not to get promotions</span><span>${pp.optedOut.length}</span></div>` : ''}
+          ${how !== 'email' && pp.noPhone.length ? `<div class="pay-row"><span>Skipped: no phone number</span><span>${pp.noPhone.length}</span></div>` : ''}
+          <div class="muted small" style="margin-top:8px">Preview for ${esc(firstName(first.name))}:</div><div class="bubble out preview"><div class="bubble-text">${esc(blastText(f.body.value, first, f.optOut.checked))}</div></div>`;
+      };
+      f.addEventListener('input', upd); f.addEventListener('change', upd); upd();
+    },
+    onSubmit: (f, d) => {
+      const pp = blastPeople(d.aud, d.tag), how = sms ? 'sms' : d.how, audience = AUDIENCES.find(a => a[0] === d.aud)[1].replace('…', d.tag ? `: ${d.tag}` : '');
+      const people = how === 'email' ? pp.send.concat(pp.noPhone).filter(c => c.email) : pp.send;
+      if (!people.length) { toast('No one to send to'); return false; }
+      const blast = { id: uid(), at: new Date().toISOString(), body: d.body.trim(), audience, via: how, sent: 0, failed: 0, phones: people.map(c => digits10(c.phone)).filter(Boolean) };
+      const msgOf = c => blastText(blast.body, c, !!d.optOut);
+      if (how === 'sms') { if (!confirm(`Send this text to ${people.length} ${people.length === 1 ? 'person' : 'people'} now?`)) return false; setTimeout(() => runBlast(blast, people, msgOf), 50); return; }
+      if (how === 'email') {
+        const s = db.settings;
+        db.blasts.push({ ...blast, sent: people.length }); save();
+        location.href = `mailto:${encodeURIComponent(s.email || '')}?bcc=${people.map(c => encodeURIComponent(c.email)).join(',')}&subject=${encodeURIComponent(`A special offer from ${s.businessName || 'us'}`)}&body=${encodeURIComponent(blastText(blast.body, { name: 'there' }, false).replace(/^Hi there!/, 'Hi!'))}`;
+        return;
+      }
+      setTimeout(() => oneByOne(blast, people, msgOf), 50);
+    } });
+}
+async function runBlast(blast, people, msgOf) {
+  const m = modal({ title: 'Sending…', noFoot: true, focus: false, body: `<div class="progress" style="height:10px"><i class="js-bar" style="width:0"></i></div><p class="js-bstat muted small">Starting…</p>` });
+  db.blasts.push(blast);
+  for (let i = 0; i < people.length; i++) {
+    const c = people[i], r = await sendText(c, msgOf(c), { blastId: blast.id });
+    r.ok ? blast.sent++ : blast.failed++;
+    const bar = $('.js-bar', m.form); if (bar) bar.style.width = `${Math.round((i + 1) / people.length * 100)}%`;
+    const st = $('.js-bstat', m.form); if (st) st.textContent = `${i + 1} of ${people.length} · ${blast.sent} sent${blast.failed ? ` · ${blast.failed} failed` : ''}`;
+    await new Promise(res => setTimeout(res, 120)); // stay well under carrier rate limits
+  }
+  save(); m.close();
+  toast(`Promo sent to ${blast.sent} ${blast.sent === 1 ? 'person' : 'people'}${blast.failed ? ` · ${blast.failed} failed` : ''}`);
+  (state.filters.messages ||= {}).tab = 'blasts'; go('#/messages');
+}
+function oneByOne(blast, people, msgOf) {
+  db.blasts.push({ ...blast, sent: 0 }); save();
+  const b = db.blasts.at(-1);
+  modal({ title: `Text ${people.length} people`, noFoot: true, focus: false, body: `<p class="muted small" style="margin-top:0">Tap each one. Your Messages app opens with the text ready: tap send, then come back for the next.</p>
+    ${people.map((c, i) => `<a class="list-item js-one js-raw-sms" data-i="${i}" href="${smsHref(c.phone, msgOf(c))}" style="color:inherit"><span class="avatar sm" style="background:#34c759">${esc(c.name[0] || '?')}</span>
+      <div class="grow"><div class="title">${esc(c.name)}</div><div class="muted small">${esc(formatPhone(c.phone))}</div></div><span class="badge js-st">Text</span></a>`).join('')}`,
+    onMount: f => $$('.js-one', f).forEach(a => a.addEventListener('click', () => {
+      const c = people[+a.dataset.i];
+      if (!a.classList.contains('done')) { b.sent++; logMsg({ customerId: c.id || '', phone: c.phone, dir: 'out', body: msgOf(c), via: 'phone', status: 'opened', blastId: b.id }); save(); }
+      a.classList.add('done'); $('.js-st', a).textContent = 'Sent ✓'; $('.js-st', a).className = 'badge good js-st';
+    })) });
+}
+
 /* ---------- Settings ---------- */
 VIEWS.settings = () => {
   const s = db.settings;
@@ -3184,7 +3628,8 @@ VIEWS.settings = () => {
     ${field('Online payment link (optional)', inp('paymentLink', s.paymentLink, 'type="url" placeholder="Stripe, Square or PayPal payment link"'), 'full')}
     ${field('Review link (optional)', inp('reviewLink', s.reviewLink, 'type="url" placeholder="Your Google review link"'), 'full')}
     ${field('Default invoice note', `<textarea name="invoiceNotes">${esc(s.invoiceNotes)}</textarea>`, 'full')}
-    ${field('Default quote note / terms', `<textarea name="quoteNotes">${esc(s.quoteNotes)}</textarea>`, 'full')}
+    ${field('Default quote note', `<textarea name="quoteNotes">${esc(s.quoteNotes)}</textarea>`, 'full')}
+    ${field('Quote terms (customers agree to these when they approve online)', `<textarea name="quoteTerms" rows="5">${esc(s.quoteTerms)}</textarea>`, 'full')}
   </div></div>
   <div class="card ${show('plans')}"><h2>Stripe: charge cards from this app</h2>
     <p class="muted small">Connect your Stripe account to save customers’ cards securely, charge them in one tap, send pay-online links and refund. Money goes to your Stripe balance and Stripe pays it out to your bank.</p>
@@ -3198,15 +3643,9 @@ VIEWS.settings = () => {
       <label class="check full"><input type="checkbox" name="autoChargePlans" ${s.autoChargePlans ? 'checked' : ''}> When I complete a service-plan visit, invoice it and charge the card on file automatically</label>
       <label class="check full"><input type="checkbox" name="saveCardOnPay" ${s.saveCardOnPay ? 'checked' : ''}> Save the customer’s card when they pay an invoice online (so you can charge it next time)</label>
     </div>
-    <div class="row" style="margin-top:12px">${btn('Save & test connection', 'stripeTestSave', 'btn-primary btn-sm', '', 'check')}
-      <a class="btn btn-sm" href="https://github.com/OnelYonan/1st-github-project/blob/claude/zealous-lovelace-h3cu2y/STRIPE-SETUP.md" target="_blank" rel="noopener">Setup guide ↗</a></div>
-    <details style="margin-top:12px"><summary class="small"><b>How to connect (about 15 minutes)</b></summary><ol class="small setup-steps">
-      <li>Create a free <a href="https://dashboard.stripe.com/register" target="_blank" rel="noopener">Stripe account</a>. Stay in <b>Test mode</b> for now.</li>
-      <li>Create a free <a href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noopener">Cloudflare account</a> → Workers &amp; Pages → Create → Worker → name it <code>business-hub-pay</code> → Deploy.</li>
-      <li>Edit code → replace everything with the code from <code>stripe-worker/worker.js</code> in your repository → Deploy.</li>
-      <li>Worker → Settings → Variables and Secrets: add <b>STRIPE_SECRET_KEY</b> (Secret, from Stripe → Developers → API keys), <b>APP_TOKEN</b> (Secret, tap Generate above and paste it), and <b>ALLOWED_ORIGINS</b> (Text) = <code>${esc(location.origin)}</code>.</li>
-      <li>Paste the Worker’s address above and tap <b>Save &amp; test connection</b>.</li>
-      <li>Try it with Stripe’s test card 4242 4242 4242 4242. When you’re ready, swap in your live secret key.</li></ol></details></div>
+    <div class="row" style="margin-top:12px">${btn('Save & test connection', 'stripeTestSave', 'btn-sm', '', 'check')}${s.stripeStatus ? btn('Setup guide', 'connectStripe', 'btn-sm') : ''}
+      <a class="btn btn-sm" href="${SETUP_DOC}" target="_blank" rel="noopener">Written guide ↗</a></div>
+    ${s.stripeStatus ? '' : `<div class="connect-cta"><div><b>Not set up yet?</b><div class="muted small">A guided setup: about 10 minutes, no coding.</div></div>${btn('Connect Stripe step by step', 'connectStripe', 'btn-primary', '', 'check')}</div>`}</div>
   <div class="card ${show('plans')}"><h2>Payments &amp; cards on file</h2>
     <p class="muted small">Cards are saved securely in your payment processor. This app keeps only the card type, last 4 digits and expiry, so it never holds full card numbers.</p>
     <div class="form-grid">
@@ -3224,6 +3663,17 @@ VIEWS.settings = () => {
     </div>
     <p class="muted small">Placeholders: <code>{business}</code> <code>{start}</code> <code>{term}</code> <code>{price}</code> <code>{minVisits}</code> <code>{fee}</code> <code>{renew}</code> <code>{customer}</code>.
       These are sensible starting terms, not legal advice. Have them reviewed for your province, since consumer protection rules can limit cancellation fees.</p></div>
+  <div class="card ${show('messages')}"><h2>Texting from the app</h2>
+    <p class="muted small">Without this, texts open your phone’s Messages app ready to send (that works fine). Turn it on to send texts and promo blasts from a business number right here, and see customers’ replies in Messages.</p>
+    <div class="stripe-status">${serverHas('sms') ? `<span class="badge good">Texting on</span> Sending from <b>${esc(formatPhone(s.stripeStatus.features.smsFrom))}</b>` : stripeOn() ? '<span class="badge">Not set up</span> Your server is connected. Add Twilio to it (steps below).' : '<span class="badge">Not set up</span> Connect your server first (Settings → Plans & payments → Connect Stripe).'}</div>
+    <details style="margin-top:12px" ${stripeOn() && !serverHas('sms') ? 'open' : ''}><summary class="small"><b>How to turn on texting (Twilio, about 10 minutes)</b></summary><ol class="small setup-steps">
+      <li>Create a <a href="https://www.twilio.com/try-twilio" target="_blank" rel="noopener">Twilio account</a> and buy a phone number with SMS in your area (about $1.15 USD a month, plus about 1¢ per text).</li>
+      <li>In Twilio, copy your <b>Account SID</b> and <b>Auth Token</b> (Console home page).</li>
+      <li>In Cloudflare, open your <b>business-hub-server</b> Worker → Settings → Variables and Secrets. Add <code>TWILIO_ACCOUNT_SID</code> and <code>TWILIO_AUTH_TOKEN</code> as <b>Secrets</b>, and <code>TWILIO_FROM</code> as <b>Text</b> with your Twilio number like <code>+14165550100</code>. Deploy.</li>
+      <li>In Twilio → Phone Numbers → your number → Messaging → “A message comes in”: Webhook, HTTP POST, this address:
+        <div class="row" style="flex-wrap:nowrap;margin-top:6px"><input readonly value="${esc(stripeOn() ? serverBase() + '/twilio/inbound' : 'Connect your server first')}" onfocus="this.select()">${stripeOn() ? `<button type="button" class="btn btn-sm js-copy-val">Copy</button>` : ''}</div></li>
+      <li>Tap <b>Check connection</b>. You should see “Texting on”.</li></ol></details>
+    <div class="row" style="margin-top:12px">${btn('Check connection', 'stripeTestSave', 'btn-sm', '', 'check')}</div></div>
   <div class="card ${show('messages')}"><h2>Message templates</h2>
     <p class="muted small">Used when you text or email customers. Placeholders: <code>{first}</code> <code>{customer}</code> <code>{business}</code> <code>{number}</code> <code>{total}</code>
     <code>{balance}</code> <code>{due}</code> <code>{valid}</code> <code>{items}</code> <code>{date}</code> <code>{time}</code> <code>{pay}</code> <code>{review}</code> <code>{signature}</code></p>
@@ -3272,12 +3722,14 @@ VIEWS.settings.mount = () => {
   });
 };
 document.addEventListener('click', e => {
+  const cp = e.target.closest('.js-copy-val');
+  if (cp) { const v = cp.previousElementSibling.value; navigator.clipboard?.writeText(v).then(() => toast('Copied'), () => prompt('Copy:', v)); }
   if (e.target.closest('.js-show-token')) { const i = $('#settingsForm [name=stripeToken]'); i.type = i.type === 'password' ? 'text' : 'password'; e.target.textContent = i.type === 'password' ? 'Show' : 'Hide'; }
   if (e.target.closest('.js-gen-token')) {
     const i = $('#settingsForm [name=stripeToken]');
     if (i.value && !confirm('Replace the current token? You’ll need to update APP_TOKEN in Cloudflare too.')) return;
     const bytes = crypto.getRandomValues(new Uint8Array(24));
-    i.value = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); i.type = 'text';
+    i.value = newToken(); void bytes; i.type = 'text';
     navigator.clipboard?.writeText(i.value).then(() => toast('Token copied. Paste it as APP_TOKEN in Cloudflare, then Save.'), () => toast('Copy this token into Cloudflare as APP_TOKEN, then Save.'));
   }
 });
@@ -3331,8 +3783,10 @@ function customerForm(c, onSaved) {
     ${field('Tags', inp('tags', c.tags, 'placeholder="e.g. residential, referral"'))}
     ${field('How they found you', `<select name="source">${opts(LEAD_SOURCES.map(x => [x, x || '—']), c.source || '')}</select>`)}
     ${field('Sold by (sales rep)', memberSelect('salesRep', c.salesRep, '—'))}
-    ${field('Notes', `<textarea name="notes" placeholder="Gate code, pets, preferences…">${esc(c.notes)}</textarea>`, 'full')}</div>`,
+    ${field('Notes', `<textarea name="notes" placeholder="Gate code, pets, preferences…">${esc(c.notes)}</textarea>`, 'full')}
+    <label class="check full"><input type="checkbox" name="noPromo" ${c.noPromo ? 'checked' : ''}> Don’t send this customer promotions (they asked not to, or replied STOP)</label></div>`,
     onSubmit: (f, d) => {
+      d.noPromo = !!d.noPromo;
       if (isNew) {
         const digits = x => String(x || '').replace(/\D/g, '').slice(-10);
         const dup = db.customers.find(x => (d.phone && digits(x.phone) && digits(x.phone) === digits(d.phone)) || (d.email && x.email && x.email.toLowerCase() === d.email.trim().toLowerCase()));
@@ -3512,14 +3966,18 @@ function docForm(type, d, preset = {}) {
   </div><h3 style="margin:16px 0 8px">Line items</h3>${itemsEditorHTML(d)}
   ${!isInv ? field('Deposit required (% of total, optional)', inp('depositPct', d.depositPct || '', 'type="number" min="0" max="100" step="1" placeholder="e.g. 25"')) : ''}
   ${field('Notes shown to customer', `<textarea name="notes">${esc(d.notes)}</textarea>`, 'full')}`,
-    onMount: f => { d._getItems = mountItemsEditor(f, d); bindCustomerSelect(f); },
+    onMount: f => { d._getItems = mountItemsEditor(f, d, { optional: !isInv }); bindCustomerSelect(f); },
     onSubmit: (f, v) => {
       const items = d._getItems();
       if (!items.length) { toast('Add at least one line item'); return false; }
       delete d._getItems;
+      const before = !isInv && d.signature ? quoteCanonical(d) : '';
       Object.assign(d, { customerId: v.customerId, date: v.date, notes: v.notes, serviceAddress: v.serviceAddress, items,
         discount: +v.discount || 0, taxRate: v.taxRate === '' ? s.taxRate : +v.taxRate });
       if (isInv) d.dueDate = v.dueDate; else { d.validUntil = v.validUntil; d.depositPct = Math.min(100, Math.max(0, +v.depositPct || 0)); }
+      if (before && before !== quoteCanonical(d)) { // like Jobber: changing an approved quote removes the customer's signature
+        delete d.signature; d.status = 'sent'; d.approvedAt = ''; setTimeout(() => toast('Quote changed after approval. Send it again for a new signature.'), 400);
+      }
       if (isNew) {
         Object.assign(d, { id: uid(), number: nextNumber(type), createdAt: today() });
         if (isInv) { d.payments = []; db.invoices.push(d); } else { d.status = 'draft'; db.quotes.push(d); }
@@ -3778,6 +4236,7 @@ function paymentForm(inv) {
  * ===================================================================== */
 /** With Stripe connected, invoice messages include a pay-online link. */
 async function payUrlFor(type, d) {
+  if (type === 'quote') { try { return await quoteLink(d); } catch { return ''; } }
   if (type !== 'invoice' || !stripeOn() || balance(d) <= 0) return '';
   try { return await ensurePayLink(d); } catch (e) { toast('Sent without a pay link: ' + e.message); return ''; }
 }
@@ -3867,9 +4326,9 @@ const ACTIONS = {
     toast(sat ? 'Satellite view' : 'Street map');
   },
   mapNorth: () => map?.easeTo({ bearing: 0, pitch: 0, duration: 500 }),
-  mapShow: (ds, el) => {
-    (state.filters.canvass ||= {}).show = ds.v;
-    $$('.map-chips .chip-btn').forEach(b => b.classList.toggle('active', b === el));
+  mapWhen: (ds, el) => {
+    (state.filters.canvass ||= {}).when = ds.v;
+    $$('.map-when button').forEach(b => b.classList.toggle('active', b === el));
     drawPins();
   },
   showDue: () => showDueList(),
@@ -4000,6 +4459,10 @@ const ACTIONS = {
   hideSetup: () => { db.settings.hideSetup = true; refresh(); },
   hideInstall: () => { db.settings.hideInstall = true; refresh(); },
   quickSetup: () => quickSetupForm(),
+  connectStripe: () => connectStripeWizard(),
+  newMessage: ds => newMessageForm({ customerId: ds.cust }),
+  newBlast: () => blastForm(),
+  checkInbox: () => checkInbox(true),
   newLead: () => leadForm(), editLead: ds => leadForm(byId('leads', ds.id)),
   toggleClosedLeads: () => { state.filters.leads ||= {}; state.filters.leads.closed = state.filters.leads.closed === '1' ? '' : '1'; render(); },
   newTask: ds => taskForm(null, ds.cust ? { customerId: ds.cust } : {}), editTask: ds => taskForm(byId('tasks', ds.id)),
@@ -4043,17 +4506,17 @@ const ACTIONS = {
   },
   docText: async ds => {
     const d = docOf(ds), c = cust(d.customerId) || {}, url = await payUrlFor(ds.type, d);
-    location.href = smsHref(c.phone, docMessage(ds.type, d, 'send', url));
+    openSms(c.phone, docMessage(ds.type, d, 'send', url));
     markSent(ds.type, d); save(); setTimeout(render, 400);
   },
   docRemind: async ds => {
     const d = docOf(ds), c = cust(d.customerId) || {}, msg = docMessage('invoice', d, 'reminder', await payUrlFor('invoice', d));
-    location.href = c.phone ? smsHref(c.phone, msg) : mailHref(c.email, `Reminder: invoice ${d.number}`, msg);
+    if (c.phone) openSms(c.phone, msg); else location.href = mailHref(c.email, `Reminder: invoice ${d.number}`, msg);
     d.remindedAt = today(); save(); setTimeout(render, 400);
   },
-  docFollow: ds => {
-    const d = docOf(ds), c = cust(d.customerId) || {}, msg = docMessage('quote', d, 'followup');
-    location.href = c.phone ? smsHref(c.phone, msg) : mailHref(c.email, `Following up on quote ${d.number}`, msg);
+  docFollow: async ds => {
+    const d = docOf(ds), c = cust(d.customerId) || {}, msg = docMessage('quote', d, 'followup', await payUrlFor('quote', d));
+    if (c.phone) openSms(c.phone, msg); else location.href = mailHref(c.email, `Following up on quote ${d.number}`, msg);
     d.followedUpAt = today(); save();
   },
   quoteDeposit: ds => {
@@ -4072,6 +4535,12 @@ const ACTIONS = {
   recordPayment: ds => paymentForm(docOf(ds)),
   deletePayment: ds => { const inv = byId('invoices', ds.id), snap = snapshot(); inv.payments = inv.payments.filter(p => p.id !== ds.pid); refresh(); undoToast(snap, 'Payment removed'); },
   voidInvoice: ds => { if (confirm('Void this invoice? It will stay in your records but no longer count as owed.')) { docOf(ds).void = true; refresh(); } },
+  quoteCopyLink: async ds => {
+    const q = byId('quotes', ds.id), link = await quoteLink(q);
+    try { await navigator.clipboard.writeText(link); toast('Approval link copied'); } catch { prompt('Copy this link:', link); }
+    markSent('quote', q); refresh();
+  },
+  quotePreview: async ds => { const w = window.open('', '_blank'); const link = await quoteLink(byId('quotes', ds.id)); if (w) w.location = link; else location.href = link; },
   quoteApprove: ds => {
     const q = docOf(ds); q.status = 'approved'; q.approvedAt = today(); q.sentAt ||= today();
     db.leads.forEach(l => { if (l.quoteId === q.id) { l.stage = 'won'; l.closedAt = today(); } });
@@ -4082,10 +4551,10 @@ const ACTIONS = {
     db.leads.forEach(l => { if (l.quoteId === q.id) { l.stage = 'lost'; l.closedAt = today(); } });
     refresh();
   },
-  quoteToJob: ds => { const q = docOf(ds); jobForm(null, { customerId: q.customerId, title: (q.items[0]?.desc || 'Job') + (q.items.length > 1 ? ' + more' : ''), items: structuredClone(q.items), discount: q.discount, taxRate: q.taxRate, quoteId: q.id, address: q.serviceAddress }); },
+  quoteToJob: ds => { const q = docOf(ds), items = chosenItems(q.items); jobForm(null, { customerId: q.customerId, title: (items[0]?.desc || 'Job') + (items.length > 1 ? ' + more' : ''), items: structuredClone(items), discount: q.discount, taxRate: q.taxRate, quoteId: q.id, address: q.serviceAddress }); },
   quoteToInvoice: ds => {
     const q = docOf(ds), credit = depositCredit(q.id);
-    const inv = invoiceFromItems(q, { quoteId: q.id, jobId: q.jobId });
+    const inv = invoiceFromItems({ ...q, items: chosenItems(q.items) }, { quoteId: q.id, jobId: q.jobId });
     if (credit) inv.items.push(credit);
     q.status = 'converted'; q.invoiceId = inv.id; save(); go('#/invoices/' + inv.id);
   },
@@ -4400,6 +4869,7 @@ load().then(d => {
   render();
   migrateImages().then(() => hydrateImages($('#main')));
   takeSnapshot();
+  setTimeout(() => checkInbox(), 1500);
   if (storageMode === 'local') toast('Private browsing detected: data may not be kept. Download backups often.');
 });
 navigator.storage?.persist?.().catch(() => {}); // ask the browser not to clear our data

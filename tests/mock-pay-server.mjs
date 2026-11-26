@@ -8,11 +8,22 @@
  *   POST /__mock/save-card?customer=cus_1&last4=4242   simulate a customer saving a card
  *   POST /__mock/pay?id=cs_2                          simulate paying a pay-online link
  *   GET  /__mock/log                                  every request sent to "Stripe"
+ *   POST /__mock/sms-in?from=+14165550101&body=Hi     a customer texts back (signed like Twilio does)
+ *   GET  /__mock/sms-log                              every text "sent" through Twilio
  */
 import http from 'node:http';
+import { createHmac } from 'node:crypto';
 import worker from '../stripe-worker/worker.js';
 
-const env = { STRIPE_SECRET_KEY: 'sk_test_mock', APP_TOKEN: 'test-token-123', ALLOWED_ORIGINS: 'http://localhost:8765' };
+/* Workers KV, in memory */
+const kv = new Map();
+const INBOX = {
+  async put(k, v) { kv.set(k, v); }, async get(k) { return kv.get(k) ?? null; }, async delete(k) { kv.delete(k); },
+  async list({ prefix = '' } = {}) { return { keys: [...kv.keys()].filter(k => k.startsWith(prefix)).sort().map(name => ({ name })), list_complete: true }; },
+};
+const env = { STRIPE_SECRET_KEY: 'sk_test_mock', APP_TOKEN: 'test-token-123', ALLOWED_ORIGINS: 'http://localhost:8765',
+  TWILIO_ACCOUNT_SID: 'ACmock', TWILIO_AUTH_TOKEN: 'twilio-secret', TWILIO_FROM: '+14165550100', INBOX };
+const smsLog = [];
 const db = { customers: {}, pms: {}, sessions: {}, pis: {}, n: 0 };
 const log = [];
 const id = p => `${p}_${++db.n}`;
@@ -50,6 +61,12 @@ function stripeFake(method, path, params, headers) {
 }
 globalThis.fetch = async (url, opts = {}) => {
   const u = new URL(typeof url === 'string' ? url : url.url);
+  if (u.hostname === 'api.twilio.com') {
+    const b = Object.fromEntries(new URLSearchParams(opts.body || ''));
+    if (opts.headers?.Authorization !== 'Basic ' + btoa('ACmock:twilio-secret')) return new Response(JSON.stringify({ message: 'Authenticate', code: 20003 }), { status: 401 });
+    if (b.To === '+14165550199') return new Response(JSON.stringify({ message: 'Attempt to send to unsubscribed recipient', code: 21610 }), { status: 400 });
+    smsLog.push(b); return new Response(JSON.stringify({ sid: 'SM' + smsLog.length, status: 'queued' }), { status: 201 });
+  }
   if (u.hostname !== 'api.stripe.com') return realFetch(url, opts);
   const method = opts.method || 'GET';
   const params = Object.fromEntries(method === 'GET' ? u.searchParams : new URLSearchParams(opts.body || ''));
@@ -69,6 +86,15 @@ http.createServer(async (req, res) => {
       const s = db.sessions[q.id]; if (s) { s.status = 'complete'; s.payment_status = 'paid'; s.pi = id('pi'); db.pis[s.pi] = { id: s.pi, amount_received: s.amount_total }; }
       out = s || { error: 'no session' };
     } else if (url.pathname === '/__mock/log') out = log;
+    else if (url.pathname === '/__mock/sms-log') out = smsLog;
+    else if (url.pathname === '/__mock/sms-in') {
+      const params = { From: q.from, Body: q.body, MessageSid: 'SMin' + Date.now(), NumMedia: '0' };
+      const hookUrl = 'http://localhost:8787/twilio/inbound';
+      const sig = createHmac('sha1', 'twilio-secret').update(hookUrl + Object.keys(params).sort().map(k => k + params[k]).join('')).digest('base64');
+      const r = await worker.fetch(new Request(hookUrl, { method: 'POST', body: new URLSearchParams(params).toString(),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Twilio-Signature': q.badsig ? 'nope' : sig } }), env);
+      out = { status: r.status };
+    }
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }); res.end(JSON.stringify(out)); return;
   }
   const chunks = []; for await (const c of req) chunks.push(c);

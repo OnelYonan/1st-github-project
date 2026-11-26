@@ -1,0 +1,13 @@
+// Business Hub server. Deploy with the "Deploy to Cloudflare" button in STRIPE-SETUP.md,
+// or paste worker.js into a new Worker by hand.
+{
+  "name": "business-hub-server",
+  "main": "worker.js",
+  "compatibility_date": "2025-06-01",
+  "vars": {
+    // where your app lives; add more, comma separated
+    "ALLOWED_ORIGINS": "https://onelyonan.github.io"
+  },
+  // customers' approvals and text replies wait here until the app collects them
+  "kv_namespaces": [{ "binding": "INBOX" }]
+}

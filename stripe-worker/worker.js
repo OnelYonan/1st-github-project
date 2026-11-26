@@ -1,14 +1,17 @@
 /**
- * Business Hub payment server (Cloudflare Worker).
+ * Business Hub server (Cloudflare Worker).
  *
- * Keeps your Stripe secret key private and lets the Business Hub app:
- *  - save customers' cards with Stripe (Stripe-hosted page, card numbers never touch your app)
- *  - charge a saved card, create pay-online links, check payments and refund.
+ * Keeps your secret keys private and lets the Business Hub app:
+ *  - Stripe: save customers' cards (Stripe-hosted page), charge them, pay-online links, refunds
+ *  - Texting (optional, Twilio): send texts and promo blasts from the app, receive replies
+ *  - Inbox: customers' quote approvals and signed agreements arrive in the app automatically
  *
  * Settings (Cloudflare → your Worker → Settings → Variables and Secrets):
  *   STRIPE_SECRET_KEY  (secret)  sk_test_… while testing, sk_live_… when you go live
- *   APP_TOKEN          (secret)  a long random password; paste the same one into the app
+ *   APP_TOKEN          (secret)  a long random password; the app makes one for you
  *   ALLOWED_ORIGINS    (text)    where your app lives, e.g. https://onelyonan.github.io
+ *   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN (secrets), TWILIO_FROM (text, e.g. +14165550100)  optional, for texting
+ * Storage: a KV namespace bound as INBOX (created for you by the Deploy button).
  *
  * See STRIPE-SETUP.md for step-by-step instructions.
  */
@@ -49,6 +52,46 @@ function sameToken(a = '', b = '') {
 const cardOut = pm => ({ id: pm.id, brand: pm.card?.brand, last4: pm.card?.last4, exp_month: pm.card?.exp_month, exp_year: pm.card?.exp_year, wallet: pm.card?.wallet?.type || '' });
 const cents = amount => { const c = Math.round(Number(amount) * 100); if (!Number.isFinite(c) || c < 50) { const e = new Error('Amount must be at least 0.50'); e.status = 400; throw e; } return c; };
 
+const smsOn = env => !!(env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_FROM);
+const DAY = 86400;
+
+/** Keep something for the app to collect (60 days). */
+async function toInbox(env, kind, data) {
+  if (!env.INBOX) throw Object.assign(new Error('Inbox storage is not set up on this server.'), { status: 501 });
+  const key = `in:${Date.now().toString(36)}:${crypto.randomUUID().slice(0, 8)}`;
+  await env.INBOX.put(key, JSON.stringify({ kind, at: new Date().toISOString(), ...data }), { expirationTtl: 60 * DAY });
+  return key;
+}
+
+/** Twilio signs its webhooks: HMAC-SHA1 of the URL plus the sorted form fields, keyed with the auth token. */
+async function twilioSigned(req, env, params) {
+  const sig = req.headers.get('X-Twilio-Signature') || '';
+  const data = new URL(req.url).href + Object.keys(params).sort().map(k => k + params[k]).join('');
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.TWILIO_AUTH_TOKEN), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data)));
+  return sameToken(btoa(String.fromCharCode(...mac)), sig);
+}
+
+/** Routes anyone may call: customers sending back a signed quote or agreement, and Twilio delivering a reply. */
+async function publicRoute(req, env, url) {
+  const p = url.pathname.replace(/\/+$/, '');
+  if (p === '/public/submit' && req.method === 'POST') {
+    const text = await req.text();
+    if (text.length > 150000) throw Object.assign(new Error('Too large'), { status: 413 });
+    let b; try { b = JSON.parse(text); } catch { throw Object.assign(new Error('Bad request'), { status: 400 }); }
+    if (!['quote', 'plan'].includes(b.k) || typeof b.id !== 'string' || b.id.length > 40) throw Object.assign(new Error('Bad request'), { status: 400 });
+    await toInbox(env, 'response', { data: b }); // the app checks it against the real quote before using it
+    return { ok: true };
+  }
+  if (p === '/twilio/inbound' && req.method === 'POST') {
+    const params = Object.fromEntries(new URLSearchParams(await req.text()));
+    if (!smsOn(env) || !(await twilioSigned(req, env, params))) return new Response('Forbidden', { status: 403 });
+    await toInbox(env, 'sms', { from: params.From || '', body: String(params.Body || '').slice(0, 2000), sid: params.MessageSid || '', media: +params.NumMedia || 0 });
+    return new Response('<?xml version="1.0" encoding="UTF-8"?><Response></Response>', { headers: { 'Content-Type': 'text/xml' } });
+  }
+  return null;
+}
+
 async function route(req, env, url) {
   const p = url.pathname.replace(/\/+$/, '') || '/';
   const body = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
@@ -56,10 +99,36 @@ async function route(req, env, url) {
   const cur = String(body.currency || q.currency || 'cad').toLowerCase();
 
   if (p === '/health') {
+    const features = { stripe: !!env.STRIPE_SECRET_KEY, sms: smsOn(env), inbox: !!env.INBOX, smsFrom: env.TWILIO_FROM || '' };
+    if (!env.STRIPE_SECRET_KEY) return { ok: true, features };
     const acct = await stripe(env, 'GET', '/account');
-    return { ok: true, mode: env.STRIPE_SECRET_KEY.startsWith('sk_live') ? 'live' : 'test', account: acct.business_profile?.name || acct.settings?.dashboard?.display_name || acct.email || acct.id,
+    return { ok: true, features, mode: env.STRIPE_SECRET_KEY.startsWith('sk_live') ? 'live' : 'test', account: acct.business_profile?.name || acct.settings?.dashboard?.display_name || acct.email || acct.id,
       chargesEnabled: !!acct.charges_enabled, payoutsEnabled: !!acct.payouts_enabled, country: acct.country, currency: acct.default_currency };
   }
+  if (p === '/sms' && req.method === 'POST') {
+    if (!smsOn(env)) throw Object.assign(new Error('Texting is not set up on the server (Twilio settings missing).'), { status: 501 });
+    const to = String(body.to || '').replace(/[^\d+]/g, ''), text = String(body.body || '').slice(0, 1600);
+    if (!to || !text) throw Object.assign(new Error('A phone number and message are required.'), { status: 400 });
+    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`, {
+      method: 'POST', body: new URLSearchParams({ To: to.startsWith('+') ? to : (to.length === 10 ? '+1' + to : '+' + to), From: env.TWILIO_FROM, Body: text }),
+      headers: { Authorization: 'Basic ' + btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`), 'Content-Type': 'application/x-www-form-urlencoded' },
+    });
+    const d = await res.json();
+    if (!res.ok) return { error: d.message || 'Twilio error', code: d.code || '' }; // e.g. 21610: they replied STOP
+    return { id: d.sid, status: d.status };
+  }
+  if (p === '/inbox' && req.method === 'GET') {
+    if (!env.INBOX) return { items: [], inbox: false };
+    const list = await env.INBOX.list({ prefix: 'in:', limit: 100 });
+    const items = [];
+    for (const k of list.keys) { const v = await env.INBOX.get(k.name); if (v) items.push({ key: k.name, ...JSON.parse(v) }); }
+    return { items, more: !list.list_complete };
+  }
+  if (p === '/inbox/ack' && req.method === 'POST') {
+    for (const k of (body.keys || []).slice(0, 100)) if (String(k).startsWith('in:')) await env.INBOX?.delete(k);
+    return { ok: true };
+  }
+  if (!env.STRIPE_SECRET_KEY) throw Object.assign(new Error('Stripe is not set up on this server (STRIPE_SECRET_KEY missing).'), { status: 501 });
   if (p === '/customers' && req.method === 'POST') {
     const c = await stripe(env, 'POST', '/customers', { name: body.name, email: body.email, phone: body.phone, metadata: { app_customer: body.appCustomerId } },
       body.appCustomerId ? `cust-${body.appCustomerId}` : undefined);
@@ -129,8 +198,13 @@ export default {
     };
     const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
-    if (origin && !allowed.includes(origin)) return json({ error: 'This website is not allowed to use this payment server.' }, 403);
-    if (!env.STRIPE_SECRET_KEY || !env.APP_TOKEN) return json({ error: 'Payment server is missing STRIPE_SECRET_KEY or APP_TOKEN.' }, 500);
+    if (origin && !allowed.includes(origin)) return json({ error: 'This website is not allowed to use this server.' }, 403);
+    if (url.pathname.startsWith('/public/') || url.pathname.startsWith('/twilio/')) {
+      try { const r = await publicRoute(req, env, url); if (r instanceof Response) return r; if (r) return json(r); }
+      catch (e) { return json({ error: e.message || 'Something went wrong' }, e.status || 500); }
+      return json({ error: 'Not found' }, 404);
+    }
+    if (!env.APP_TOKEN) return json({ error: 'The server is missing APP_TOKEN.' }, 500);
     const token = (req.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '');
     if (!sameToken(token, env.APP_TOKEN)) return json({ error: 'Wrong app token.' }, 401);
     try { return json(await route(req, env, url)); }

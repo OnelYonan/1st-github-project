@@ -1,0 +1,14 @@
+{
+  "name": "business-hub-server",
+  "private": true,
+  "scripts": { "deploy": "wrangler deploy" },
+  "devDependencies": { "wrangler": "^4.20.0" },
+  "cloudflare": {
+    "bindings": {
+      "STRIPE_SECRET_KEY": { "description": "Your Stripe secret key (sk_test_… for testing, sk_live_… when live). Stripe dashboard → Developers → API keys." },
+      "APP_TOKEN": { "description": "The app token shown in Business Hub → Settings → Plans & payments → Connect. Paste it exactly." },
+      "ALLOWED_ORIGINS": { "description": "Where your Business Hub app lives. Leave as is unless you moved it." },
+      "INBOX": { "description": "Storage for quote approvals and text replies. Created for you." }
+    }
+  }
+}

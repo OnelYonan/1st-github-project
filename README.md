@@ -16,16 +16,19 @@ A booking and business app for a home-services business (window cleaning, gutter
 **Sales**
 - **Door knocking**: a full-screen satellite map like Apple Maps that you can rotate and tilt.
   - Tap a house to pin it: ✓ yes, ✗ no, quoted, come back later or not home, with notes and a full knock history.
+  - Show pins from today, this week, month, year or all time (today by default; come-backs that are due always show).
   - Stats by day, week, month and year, with a per-rep breakdown.
 - **Leads**: a pipeline board with stages you can rename.
 - **Customers**: activity timeline, notes, cards on file, statements and CSV import.
 - **Quotes and invoices**: deposits, reminders, pay-online links and PDF.
+- **Online quote approval**: customers get a link to their quote, tick any optional extras, sign and approve, or ask for changes. With the server connected, approvals land in the app automatically and a deposit invoice is created.
+- **Messages**: a conversation for each customer, quick templates, and **promo blasts** to all customers, plan customers, lapsed customers or a tag, with STOP opt-outs handled for you. With Twilio connected, texts go from your business number and replies show up in the app.
 - **Service plans**: signed agreements.
   - Templates with a main service plus add-ons (every visit or once a term).
   - Terms and conditions covering damage, liability and early cancellation.
   - Sign in person or send a signing link.
   - The cancellation fee is applied automatically.
-- **Stripe (optional)**: save cards securely, charge them in one tap, pay-online links, refunds, and auto-charging plan visits. See [STRIPE-SETUP.md](STRIPE-SETUP.md).
+- **Stripe (optional)**: save cards securely, charge them in one tap, pay-online links, refunds, and auto-charging plan visits. Set up in the app with a step-by-step guide and a one-tap Deploy to Cloudflare button. See [STRIPE-SETUP.md](STRIPE-SETUP.md).
 
 **Money and team**
 - **Income, expenses** (receipt photos, recurring expenses) and a **mileage log**.
@@ -63,7 +66,7 @@ No build step: plain HTML, CSS and JavaScript.
 | `js/shared.js` | Helpers shared with the signing page (link packing, signature pad, default terms) |
 | `sign.html`, `js/sign.js` | The page customers use to sign service agreements |
 | `paid.html` | Thank-you page after a customer saves a card or pays |
-| `stripe-worker/worker.js` | Optional payment server for Cloudflare Workers |
+| `stripe-worker/` | Optional server for Cloudflare Workers: Stripe, texting (Twilio) and the inbox for approvals and replies. Has a Deploy to Cloudflare setup |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Offline support and home-screen app |
 
 Run all tests (needs Node, Playwright and Python 3):
@@ -72,4 +75,4 @@ Run all tests (needs Node, Playwright and Python 3):
 bash tests/run-all.sh
 ```
 
-This runs the main end-to-end test, Stripe (against a fake Stripe), commissions, photos, daily copies, and an iPhone layout audit that checks 48 screens for anything off-screen.
+This runs the main end-to-end test, Stripe (against a fake Stripe), commissions, photos, daily copies, quote approval / texting / blasts / map filters (against a fake Twilio), and an iPhone layout audit that checks every main screen for anything off-screen.

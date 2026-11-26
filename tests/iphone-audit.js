@@ -52,7 +52,7 @@ const findOverflow = () => {
   await audit('welcome');
   await page.click('button:has-text("Load sample data")'); await page.waitForTimeout(400);
 
-  for (const r of ['dashboard', 'schedule', 'jobs', 'tasks', 'canvass', 'leads', 'customers', 'quotes', 'plans', 'invoices', 'income', 'expenses', 'reports', 'team', 'services', 'settings']) {
+  for (const r of ['dashboard', 'schedule', 'jobs', 'messages', 'tasks', 'canvass', 'leads', 'customers', 'quotes', 'plans', 'invoices', 'income', 'expenses', 'reports', 'team', 'services', 'settings']) {
     await go('#/' + r); await audit(r);
   }
   for (const v of ['Week', 'Day']) { await go('#/schedule'); await page.click(`.seg button:has-text("${v}")`); await audit('schedule ' + v); }
