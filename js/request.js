@@ -7,6 +7,7 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const app = $('#app');
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const SOURCES = ['Referral', 'Google', 'Facebook / Instagram', 'Website', 'Door knocking', 'Door hanger / flyer', 'Repeat customer', 'Other'];
 
 (async () => {
   let a;
@@ -29,7 +30,7 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
         <div class="day-chips" style="margin-top:8px">${['Morning', 'Afternoon', 'Evening', 'Any time'].map(x => `<label class="chip"><input type="radio" name="time" value="${x}"><span>${x}</span></label>`).join('')}</div>
         <div class="field" style="margin-top:10px"><label for="dt">Preferred date (optional)</label><input id="dt" name="date" type="date"></div></section>
       <div class="field"><label for="nt">Anything we should know?</label><textarea id="nt" name="notes" rows="3" placeholder="e.g. 2-storey house, about 20 windows, dog in the yard"></textarea></div>
-      ${a.src?.length ? `<div class="field"><label for="src">How did you hear about us?</label><select id="src" name="source"><option value="">Choose…</option>${a.src.map(x => `<option>${esc(x)}</option>`).join('')}</select></div>` : ''}
+      <div class="field"><label for="src">How did you hear about us?</label><select id="src" name="source"><option value="">Choose…</option>${(a.src || SOURCES).map(x => `<option>${esc(x)}</option>`).join('')}</select></div>
       <button class="btn btn-primary req-send" type="submit">Send request</button>
       <p class="muted small" style="text-align:center;margin:0">Your details go only to ${esc(a.b.name)}. They’ll contact you to confirm.</p>
     </form>

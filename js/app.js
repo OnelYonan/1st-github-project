@@ -1025,13 +1025,13 @@ VIEWS.dashboard = () => {
   const expiringCards = [...planCust].filter(cid => (cust(cid)?.cards || []).length && !defaultCard(cid) || (cust(cid)?.cards || []).some(k => k.isDefault && cardState(k)));
   const endingPlans = db.subscriptions.filter(x => x.status === 'active' && !x.autoRenew && inRange(planEnd(x), t, addDays(t, 30)));
   const attn = [
-    overdue.length && ['bad', 'alert', `${plural(overdue.length, 'overdue invoice')}`, `${money(sum(overdue, balance))} owed. Send a reminder.`, '#/invoices', 'invoices:tab:overdue'],
+    overdue.length && ['bad', 'alert', `${plural(overdue.length, 'overdue invoice')}`, `${money(sum(overdue, balance))} owed. Tap to remind them all.`, '', '', 'remindOverdue'],
     newLeads.length && ['info', 'funnel', `${plural(newLeads.length, 'new lead')}`, 'Waiting for you to get in touch', '#/leads'],
     uninvoiced.length && ['warn', 'invoice', `${plural(uninvoiced.length, 'job')} to invoice`, 'Completed but not billed yet', '#/jobs', 'jobs:tab:uninvoiced'],
     toSchedule.length && ['good', 'check', `${plural(toSchedule.length, 'approved quote')} to schedule`, `${esc(custName(toSchedule[0].customerId))}${toSchedule.length > 1 ? ' and others' : ''} said yes. Book the job.`, `#/quotes/${toSchedule[0].id}`],
     changeReqs.length && ['warn', 'quote', `${plural(changeReqs.length, 'quote')} with changes requested`, 'The customer asked you to update the quote', `#/quotes/${changeReqs[0].id}`],
     unreadMsgs && ['info', 'sms', `${plural(unreadMsgs, 'unread text')}`, 'Customers replied to you', '#/messages'],
-    staleQuotes.length && ['info', 'quote', `${plural(staleQuotes.length, 'quote')} to follow up`, 'Sent 3+ days ago with no answer', '#/quotes'],
+    staleQuotes.length && ['info', 'quote', `${plural(staleQuotes.length, 'quote')} to follow up`, 'Sent 3+ days ago with no answer. Tap to follow up all.', '', '', 'followQuotes'],
     remindTomorrow.length && ['info', 'sms', `Remind ${plural(remindTomorrow.length, 'customer')} about tomorrow`, 'Send appointment reminders in one go', '', '', 'sendReminders'],
     lateJobs.length && ['warn', 'calendar', `${plural(lateJobs.length, 'past job')} still open`, 'Mark them complete or reschedule', '#/jobs', 'jobs:tab:late'],
     awaitingSig.length && ['info', 'repeat', `${plural(awaitingSig.length, 'plan')} waiting for signature`, 'Sent 3+ days ago. Send a reminder.', '#/plans'],
@@ -1253,7 +1253,7 @@ function jobDetail(id) {
   const profit = revenue - tax - cost - pay.cleaner - pay.sales;
   const addr = j.address || c?.address || '';
   const statusBtns = {
-    scheduled: btn('Start job', 'jobStatus', '', `data-id="${j.id}" data-s="in_progress"`, 'clock') + btn('Complete', 'jobStatus', 'btn-primary', `data-id="${j.id}" data-s="completed"`, 'check'),
+    scheduled: (j.date === today() && cust(j.customerId)?.phone ? btn(j.onWayAt ? 'On my way ✓' : 'On my way', 'onMyWay', '', `data-id="${j.id}"`, 'truck') : '') + btn('Start job', 'jobStatus', '', `data-id="${j.id}" data-s="in_progress"`, 'clock') + btn('Complete', 'jobStatus', 'btn-primary', `data-id="${j.id}" data-s="completed"`, 'check'),
     in_progress: btn('Complete', 'jobStatus', 'btn-primary', `data-id="${j.id}" data-s="completed"`, 'check'),
     completed: '', cancelled: btn('Restore', 'jobStatus', '', `data-id="${j.id}" data-s="scheduled"`),
   }[j.status] || '';
@@ -2144,33 +2144,52 @@ function jobDoneSheet(j) {
 /* ----- visit reminders for tomorrow (like Homebase’s automatic reminders) ----- */
 const reminderJobs = () => db.jobs.filter(j => j.status === 'scheduled' && j.date === addDays(today(), 1) && !j.remindedAt && cust(j.customerId)?.phone);
 const reminderText = j => { const c = cust(j.customerId); return fillTemplate('tplAppt', { ...custVars(c), date: fmtDateShort(j.date), time: j.start ? ' at ' + fmtTime(j.start) : '' }); };
-function remindersSheet() {
-  const list = reminderJobs();
-  if (!list.length) { toast('Everyone booked for tomorrow already has a reminder'); return; }
+/** Text a list of customers in one go: all at once with texting on, one tap each otherwise.
+ *  items: [{ c, text, sub, done() }] */
+function batchTextSheet(title, note, items) {
   const sms = serverHas('sms');
-  modal({ title: `Remind tomorrow’s ${list.length === 1 ? 'customer' : list.length + ' customers'}`, noFoot: true, focus: false, body: `
-    <p class="muted small" style="margin-top:0">${sms ? 'Texts go from your business number.' : 'Tap each one: Messages opens with the reminder ready, tap send, then come back.'} Wording: Settings → Messages → Appointment confirmation.</p>
-    ${sms ? `<button type="button" class="btn btn-primary js-all" style="width:100%;margin-bottom:10px">${icon('send')}Send all ${list.length}</button>` : ''}
-    ${list.map(j => { const c = cust(j.customerId); return `<a class="list-item js-rem ${sms ? '' : 'js-raw-sms'}" data-id="${j.id}" href="${sms ? '#' : smsHref(c.phone, reminderText(j))}" style="color:inherit">
-      <span class="avatar sm" style="background:${memberColor(j.assignedTo) || '#34c759'}">${esc(c.name[0])}</span>
-      <div class="grow"><div class="title">${esc(c.name)}</div><div class="muted small">${esc(j.title)}${j.start ? ' · ' + fmtTime(j.start) : ''}</div></div><span class="badge js-st">${sms ? 'Ready' : 'Text'}</span></a>`; }).join('')}`,
+  modal({ title, noFoot: true, focus: false, body: `
+    <p class="muted small" style="margin-top:0">${sms ? 'Texts go from your business number.' : 'Tap each one: Messages opens with the text ready, tap send, then come back for the next.'} ${note}</p>
+    ${sms ? `<button type="button" class="btn btn-primary js-all" style="width:100%;margin-bottom:10px">${icon('send')}Send all ${items.length}</button>` : ''}
+    ${items.map((it, i) => `<a class="list-item js-rem ${sms ? '' : 'js-raw-sms'}" data-i="${i}" href="${sms ? '#' : smsHref(it.c.phone, it.text)}" style="color:inherit">
+      <span class="avatar sm" style="background:#34c759">${esc((it.c.name || '?')[0])}</span>
+      <div class="grow"><div class="title">${esc(it.c.name)}</div><div class="muted small">${esc(it.sub)}</div></div><span class="badge js-st">${sms ? 'Ready' : 'Text'}</span></a>`).join('')}`,
     onMount: (f, close) => {
       const mark = (a, ok = true) => { const st = $('.js-st', a); st.textContent = ok ? 'Sent ✓' : 'Failed'; st.className = `badge ${ok ? 'good' : 'bad'} js-st`; a.classList.add('done'); };
       if (!sms) $$('.js-rem', f).forEach(a => a.addEventListener('click', () => {
-        const j = byId('jobs', a.dataset.id), c = cust(j.customerId);
-        if (!j.remindedAt) { j.remindedAt = today(); logMsg({ customerId: c.id, phone: c.phone, dir: 'out', body: reminderText(j), via: 'phone', status: 'opened' }); save(); }
+        const it = items[+a.dataset.i];
+        if (!a.classList.contains('done')) { it.done(); logMsg({ customerId: it.c.id, phone: it.c.phone, dir: 'out', body: it.text, via: 'phone', status: 'opened' }); save(); }
         mark(a);
       }));
       $('.js-all', f)?.addEventListener('click', async e => {
-        e.target.disabled = true; let ok = 0;
-        for (const a of $$('.js-rem', f)) {
-          const j = byId('jobs', a.dataset.id), r = await sendText(cust(j.customerId), reminderText(j));
-          if (r.ok) { j.remindedAt = today(); ok++; } mark(a, r.ok);
-        }
-        save(); toast(`${ok} reminder${ok === 1 ? '' : 's'} sent`); setTimeout(() => { close(); render(); }, 700);
+        e.preventDefault(); e.target.disabled = true; let ok = 0;
+        for (const a of $$('.js-rem', f)) { const it = items[+a.dataset.i], r = await sendText(it.c, it.text); if (r.ok) { it.done(); ok++; } mark(a, r.ok); }
+        save(); toast(`${ok} text${ok === 1 ? '' : 's'} sent`); setTimeout(() => { close(); render(); }, 700);
       });
+      $$('.js-rem', f).forEach(a => { if (sms) a.addEventListener('click', e => e.preventDefault()); });
     } });
 }
+function remindersSheet() {
+  const list = reminderJobs();
+  if (!list.length) { toast('Everyone booked for tomorrow already has a reminder'); return; }
+  return batchTextSheet(`Remind tomorrow’s ${list.length === 1 ? 'customer' : list.length + ' customers'}`, 'Wording: Settings → Messages → Appointment confirmation.',
+    list.map(j => ({ c: cust(j.customerId), text: reminderText(j), sub: `${j.title}${j.start ? ' · ' + fmtTime(j.start) : ''}`, done: () => { j.remindedAt = today(); } })));
+}
+async function overdueSheet() {
+  const list = db.invoices.filter(i => invStatus(i) === 'overdue' && cust(i.customerId)?.phone && i.remindedAt !== today());
+  if (!list.length) { toast('No overdue invoices to remind today'); return; }
+  const items = [];
+  for (const i of list) items.push({ c: cust(i.customerId), text: docMessage('invoice', i, 'reminder', await payUrlFor('invoice', i)), sub: `${i.number} · ${money(balance(i))} · due ${fmtDateShort(i.dueDate)}`, done: () => { i.remindedAt = today(); } });
+  batchTextSheet(`Remind ${plural2(items.length, 'customer')} to pay`, stripeOn() ? 'Each text includes a secure pay-online link.' : 'Wording: Settings → Messages → Payment reminder.', items);
+}
+async function quoteFollowSheet() {
+  const t = today(), list = db.quotes.filter(q => q.status === 'sent' && q.sentAt && daysBetween(q.sentAt, t) >= 3 && quoteStatus(q) !== 'expired' && cust(q.customerId)?.phone && q.followedUpAt !== t);
+  if (!list.length) { toast('No quotes waiting for a follow-up'); return; }
+  const items = [];
+  for (const q of list) items.push({ c: cust(q.customerId), text: docMessage('quote', q, 'followup', await payUrlFor('quote', q)), sub: `${q.number} · ${money(totals(q).total)} · sent ${fmtDateShort(q.sentAt)}`, done: () => { q.followedUpAt = t; } });
+  batchTextSheet(`Follow up ${plural2(items.length, 'quote')}`, 'Each text includes the link to approve online.', items);
+}
+const plural2 = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 function addPlanVisits(p, from, to) {
   const dates = planVisitDates(p, from, to), perVisit = p.billing === 'per_visit';
   dates.forEach((date, i) => {
@@ -2734,7 +2753,8 @@ async function bookingLink() {
   if (!s.relayTopic) relayFor({}); // makes the topic
   if (!s.bookingKeys) { s.bookingKeys = await BH.newKeyPair(); save(); }
   const payload = { b: { name: s.businessName || 'Our team', phone: s.phone, email: s.email, area: s.address ? s.address.split(',').slice(-2).join(',').trim() : '' },
-    svc: db.services.filter(x => !x.addon).map(x => x.name).slice(0, 16), u: s.relayUrl || RELAY, t: s.relayTopic, pk: s.bookingKeys.pub, src: LEAD_SOURCES.filter(Boolean) };
+    svc: db.services.filter(x => !x.addon).map(x => x.name).slice(0, 16), t: s.relayTopic, pk: s.bookingKeys.pub };
+  if (s.relayUrl) payload.u = s.relayUrl; // shorter link (and QR code) for the usual relay
   return `${appBase()}request.html#${await BH.pack(payload)}`;
 }
 async function bookingShare() {
@@ -4662,6 +4682,9 @@ const ACTIONS = {
   quickSetup: () => quickSetupForm(),
   bookingShare: () => bookingShare(),
   sendReminders: () => remindersSheet(),
+  remindOverdue: () => overdueSheet(),
+  followQuotes: () => quoteFollowSheet(),
+  onMyWay: ds => { const j = byId('jobs', ds.id), c = cust(j.customerId); openSms(c.phone, fillTemplate('tplOnWay', { ...custVars(c) })); j.onWayAt = localStamp(); save(); },
   connectStripe: () => connectStripeWizard(),
   newMessage: ds => newMessageForm({ customerId: ds.cust }),
   newBlast: () => blastForm(),
@@ -4856,6 +4879,29 @@ document.addEventListener('click', e => { if (e.target.id === 'rmLogo') { db.set
 
 // Mobile menu & search
 $('#menuBtn').addEventListener('click', () => ACTIONS.openDrawer());
+// Pull down at the top of a screen to check for approvals, booking requests and texts.
+(() => {
+  let y0 = null, pulled = 0;
+  const ind = document.createElement('div'); ind.className = 'ptr'; ind.innerHTML = icon('repeat'); document.body.append(ind);
+  document.addEventListener('touchstart', e => {
+    y0 = isPhone() && scrollY <= 0 && !$('#modalRoot').children.length && !$('.sheet-backdrop') && !document.body.classList.contains('map-mode') && !e.target.closest('.sidebar, textarea, .kanban, .chat') ? e.touches[0].clientY : null;
+    pulled = 0;
+  }, { passive: true });
+  document.addEventListener('touchmove', e => {
+    if (y0 === null) return;
+    pulled = Math.max(0, e.touches[0].clientY - y0);
+    if (scrollY > 0) { y0 = null; pulled = 0; }
+    ind.style.transform = `translate(-50%, ${Math.min(pulled, 110) * .7 - 40}px) rotate(${pulled * 3}deg)`;
+    ind.classList.toggle('ready', pulled > 90); ind.style.opacity = Math.min(1, pulled / 60);
+  }, { passive: true });
+  document.addEventListener('touchend', async () => {
+    if (y0 === null) return;
+    const go2 = pulled > 90; y0 = null; pulled = 0;
+    if (!go2) { ind.style.opacity = 0; ind.style.transform = ''; return; }
+    ind.classList.add('spin');
+    try { const n = await checkInbox(); if (!n) { render(); toast('Up to date'); } } finally { ind.classList.remove('spin', 'ready'); ind.style.opacity = 0; ind.style.transform = ''; }
+  });
+})();
 // Swipe in from the left edge to open the menu, swipe it back to close.
 (() => {
   let x0 = null, y0 = 0, mode = '';

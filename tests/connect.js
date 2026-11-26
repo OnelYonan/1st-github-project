@@ -172,6 +172,26 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
   const rems = (await mock('/__mock/sms-log')).slice(smsBefore);
   check(rems.length === 2 && rems.some(m => m.Body.includes('9:30')) && await dbGet(`d.jobs.filter(j => j.id.startsWith('rem') && j.remindedAt).length === 2`), 'reminders sent and marked, with the time');
 
+  /* ---------- batch follow-ups: overdue invoices (with pay links) and waiting quotes ---------- */
+  await go('#/dashboard');
+  const overdueN = await dbGet(`d.invoices.filter(i => !i.void && i.dueDate < '${new Date().toISOString().slice(0, 10)}' && (i.payments || []).reduce((s, p) => s + p.amount, 0) < 1 && d.customers.find(c => c.id === i.customerId)?.phone).length`);
+  const s1 = (await mock('/__mock/sms-log')).length;
+  await page.locator('.attn [data-act="remindOverdue"]:visible').first().click(); await page.waitForSelector('.modal .js-all');
+  const listed = await page.locator('.modal .js-rem').count();
+  await page.click('.modal .js-all'); await page.waitForTimeout(2500);
+  const od = (await mock('/__mock/sms-log')).slice(s1);
+  check(listed >= 1 && od.length === listed && od.every(m => m.Body.includes('https://checkout.stripe.com/')), `overdue reminders sent to ${od.length} customers, each with a pay-online link`);
+  void overdueN;
+  await go('#/dashboard');
+  const fq = page.locator('.attn [data-act="followQuotes"]:visible').first();
+  if (await fq.count()) {
+    const s2 = (await mock('/__mock/sms-log')).length;
+    await fq.click(); await page.waitForSelector('.modal .js-all'); const nq = await page.locator('.modal .js-rem').count();
+    await page.click('.modal .js-all'); await page.waitForTimeout(1500);
+    const fu = (await mock('/__mock/sms-log')).slice(s2);
+    check(fu.length === nq && fu.every(m => m.Body.includes('sign.html#')), `quote follow-ups sent (${fu.length}), each with the approve-online link`);
+  } else check(false, 'quote follow-up row on dashboard');
+
   /* ---------- no server: approvals still arrive by themselves (encrypted relay) ---------- */
   await idb(`d.settings.stripeUrl = ''; d.settings.stripeToken = ''; d.settings.stripeStatus = null; d.settings.relayUrl = '${PAY}/relay';
     d.quotes.push({ id: 'qtest3', number: 'Q-9003', customerId: d.customers[2].id, date: '2026-11-21', status: 'sent', sentAt: '2026-11-21', taxRate: 13,

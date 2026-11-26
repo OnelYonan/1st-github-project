@@ -1604,3 +1604,12 @@ input[type=file]::file-selector-button {
 .btn-lg { min-height: 50px; font-size: 1rem; width: 100%; justify-content: center; }
 .js-rem.done { opacity: .6; }
 .badge.bad { background: var(--bad-soft); color: var(--bad); }
+
+/* pull to refresh */
+.ptr { position: fixed; top: calc(env(safe-area-inset-top) + 56px); left: 50%; z-index: 29; width: 34px; height: 34px; border-radius: 50%; background: var(--surface);
+  box-shadow: 0 2px 10px rgba(0,0,0,.15); display: grid; place-items: center; color: var(--text-2); opacity: 0; transform: translate(-50%, -40px); pointer-events: none; transition: opacity .15s; }
+.ptr svg { width: 18px; height: 18px; }
+.ptr.ready { color: var(--primary); }
+.ptr.spin { opacity: 1 !important; transform: translate(-50%, 30px) !important; animation: ptrSpin .7s linear infinite; }
+@keyframes ptrSpin { to { transform: translate(-50%, 30px) rotate(360deg); } }
+@media (min-width: 761px) { .ptr { display: none; } }
