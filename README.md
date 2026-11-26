@@ -21,7 +21,13 @@ Your own booking and business-management app for a home-services business: sched
 - **Service plans**: recurring agreements built from templates, with a main service plus **add-ons** (every visit or once a term), **terms & conditions** (including property-damage and liability limits), an early-cancellation fee (e.g. $50 if cancelled in the first year before 2 cleans) and auto-renewal.
   - Sign **in person** on your phone, or **text or email a signing link**. The customer signs with their finger and sends it back, and the plan activates and schedules the visits.
   - Cancelling checks the term and the visits completed, applies the fee, and offers a one-tap **charge to the card on file**.
-- **Cards on file**: card type, last 4 digits and expiry, linked to the customer's signed charge authorization. Full card numbers stay in your payment processor (Stripe, Square, Helcim…) and are never stored in the app.
+- **Stripe payments** (optional, see [STRIPE-SETUP.md](STRIPE-SETUP.md)):
+  - Customers save their card on Stripe's secure page.
+  - Charge saved cards in one tap, and optionally auto-charge plan visits when they're completed.
+  - Pay-online links in invoice messages, with the invoice marked paid automatically.
+  - Refunds.
+  - Runs through a small private payment server (`stripe-worker/worker.js`, free on Cloudflare) that keeps your Stripe secret key out of the app.
+- **Cards on file**: card type, last 4 digits and expiry; Stripe cards sync automatically. Full card numbers are never stored in the app.
 - **Leads**: a pipeline board with **stages you can rename and add**, follow-ups and sources. A lead turns into a customer and quote, or a job, in one tap.
 - **Customers**: an **activity timeline** (quotes, jobs, invoices, payments and your own notes), contact buttons, statements, and CSV import.
 - **Quotes & invoices**: deposits, payment reminders, an online payment link, PDF, and editable message templates.
@@ -57,4 +63,6 @@ All data is stored privately in the browser on the device you use (IndexedDB, wi
 ```bash
 python3 -m http.server 8765      # in this folder
 node tests/smoke.js              # end-to-end check (needs Playwright)
+node tests/mock-pay-server.mjs & # fake Stripe + the real payment server
+node tests/stripe.js             # Stripe flows
 ```

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex" />
+    <title>Thank you</title>
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body class="sign-page">
+    <main class="sign-wrap">
+      <div class="card sign-card" style="text-align:center">
+        <div style="font-size:48px;line-height:1">✓</div>
+        <h1 id="title" style="margin:10px 0 6px">Thank you!</h1>
+        <p id="msg" class="muted">All done. You can close this page.</p>
+      </div>
+    </main>
+    <script>
+      // Stripe sends customers here after they save a card or pay. Nothing is stored on this page.
+      const q = new URLSearchParams(location.search), biz = q.get('b') || 'us';
+      const set = (id, text) => { document.getElementById(id).textContent = text; };
+      if (q.get('t') === 'card') { set('title', 'Card saved'); set('msg', `Your card was saved securely with Stripe for ${biz}. You can close this page.`); }
+      else if (q.get('t') === 'pay') { set('title', 'Payment received'); set('msg', `Thanks for your payment to ${biz}. Stripe will email your receipt. You can close this page.`); }
+      else if (q.get('t') === 'cancel') { set('title', 'No changes made'); set('msg', 'Nothing was charged. You can close this page or use the link again any time.'); }
+    </script>
+  </body>
+</html>

@@ -101,6 +101,7 @@ const DEFAULT_SETTINGS = {
   paymentLink: '', reviewLink: '', monthlyGoal: 0, lastBackup: '',
   planPrefix: 'SP-', nextPlanNo: 1001, planTermMonths: 12, planMinVisits: 2, cancelFee: 50, planTerms: '',
   processor: '', processorUrl: '', cardSetupLink: '', meId: '',
+  stripeUrl: '', stripeToken: '', stripeStatus: null, autoChargePlans: false, saveCardOnPay: true,
   tplInvoice: 'Hi {first}, here is invoice {number} from {business} for {total}, due {due}.\n\n{items}\n\n{pay}\n\nThank you!\n{signature}',
   tplReminder: 'Hi {first}, a friendly reminder that invoice {number} for {balance} was due {due}.\n\n{pay}\n\nIf you have already paid, please ignore this message. Thank you!\n{signature}',
   tplQuote: 'Hi {first}, thanks for the opportunity! Here is quote {number} from {business} for {total}, valid until {valid}.\n\n{items}\n\nJust reply to let me know if you would like to go ahead and we will get you booked in.\n{signature}',
@@ -771,6 +772,7 @@ VIEWS.dashboard = () => {
       ${setupSteps.map(([done, label, href]) => `<a class="setup-step ${done ? 'done' : ''}" href="${href}">${icon(done ? 'check' : 'plus')}<span>${label}</span></a>`).join('')}</div>` : '';
 
   const knockDue = comebacksDue();
+  const readyToCharge = stripeOn() ? open.filter(i => stripeCard(i.customerId)) : [];
   const kt = knockStats(t, t, ''), kw = knockStats(addDays(t, -parseD(t).getDay()), t, '');
   const knockCard = db.pins.length ? `<a class="card knock-card" href="#/canvass" data-tabset="canvass:tab:stats" style="color:inherit"><div class="card-head"><h2>Door knocking</h2><span class="small" style="color:var(--primary)">Stats →</span></div>
     <div class="knock-mini">${[['Doors', kt.doors, kw.doors], ['Sales', kt.sale, kw.sale], ['Quotes', kt.quote, kw.quote], ['Come-backs', kt.comeback, kw.comeback]]
@@ -788,6 +790,7 @@ VIEWS.dashboard = () => {
     awaitingSig.length && ['info', 'repeat', `${plural(awaitingSig.length, 'plan')} waiting for signature`, 'Sent 3+ days ago. Send a reminder.', '#/plans'],
     expiringCards.length && ['warn', 'expense', `${plural(expiringCards.length, 'card')} expiring`, 'Customers on a plan need a new card', `#/customers/${expiringCards[0]}`],
     endingPlans.length && ['warn', 'repeat', `${plural(endingPlans.length, 'plan')} ending soon`, 'Renew before the last visit', `#/plans/${endingPlans[0].id}`],
+    readyToCharge.length && ['info', 'expense', `${plural(readyToCharge.length, 'invoice')} ready to charge`, 'Unpaid, with a Stripe card on file', '#/invoices', 'invoices:tab:unpaid'],
     knockDue.length && ['warn', 'clock', `${plural(knockDue.length, 'come-back')} due`, 'Houses that asked you to come back', '#/canvass'],
     needsBackup && ['warn', 'download', 'Back up your data', s.lastBackup ? `Last backup ${fmtDate(s.lastBackup)}` : 'No backup yet. Tap to save one.', '', '', 'exportBackup'],
   ].filter(Boolean);
@@ -1422,11 +1425,14 @@ function cardsHTML(c) {
     return `<div class="card-row clickable" data-act="editCard" data-id="${c.id}" data-cid="${k.id}">
       <span class="card-chip">${esc((k.brand || 'Card').split(' ')[0])}</span>
       <div class="grow"><div class="title">${esc(cardLabel(k))}${k.isDefault ? ' <span class="badge info">default</span>' : ''}${st ? ` <span class="badge ${st === 'expired' ? 'bad' : 'warn'}">${st}</span>` : ''}</div>
-      <div class="muted small">Exp ${esc(k.exp || '—')}${k.processor ? ` · saved in ${esc(k.processor)}` : ''}${k.name ? ` · ${esc(k.name)}` : ''}</div></div></div>`;
+      <div class="muted small">Exp ${esc(k.exp || '—')}${k.pmId ? ' · <b style="color:var(--good)">Stripe ✓ ready to charge</b>' : k.processor ? ` · saved in ${esc(k.processor)}` : ''}${k.name && !k.pmId ? ` · ${esc(k.name)}` : ''}</div></div></div>`;
   }).join('') : '<p class="muted small" style="margin:0 0 8px">No cards on file.</p>'}
   ${auths.length ? `<p class="muted small" style="margin:8px 0 0">${icon('check').replace('<svg', '<svg style="width:13px;height:13px;vertical-align:-2px"')} Charge authorization signed on ${auths.map(p => `<a href="#/plans/${p.id}">${esc(p.number)}</a> (${fmtDate(p.signature.at.slice(0, 10))})`).join(', ')}</p>` : ''}
-  <div class="row" style="margin-top:10px">${btn('Add card', 'newCard', 'btn-sm', `data-id="${c.id}"`, 'plus')}
-    ${db.settings.cardSetupLink && c.phone ? `<a class="btn btn-sm" href="${smsHref(c.phone, `Hi ${firstName(c.name)}, you can securely add your card for ${db.settings.businessName || 'us'} here: ${db.settings.cardSetupLink}`)}">${icon('sms')}Text secure card link</a>` : ''}</div>`;
+  <div class="row" style="margin-top:10px">${stripeOn() ? btn('Save card with Stripe', 'stripeCardLink', 'btn-sm btn-primary', `data-id="${c.id}"`, 'expense') + (c.stripeId ? btn('Refresh', 'syncCards', 'btn-sm', `data-id="${c.id}"`, 'repeat') : '')
+      : btn('Add card', 'newCard', 'btn-sm', `data-id="${c.id}"`, 'plus')}
+    ${!stripeOn() && db.settings.cardSetupLink && c.phone ? `<a class="btn btn-sm" href="${smsHref(c.phone, `Hi ${firstName(c.name)}, you can securely add your card for ${db.settings.businessName || 'us'} here: ${db.settings.cardSetupLink}`)}">${icon('sms')}Text secure card link</a>` : ''}</div>
+  ${stripeOn() ? `<button class="link-btn small" style="margin-top:8px" data-act="newCard" data-id="${c.id}">Record a card without Stripe</button>`
+    : `<p class="muted small" style="margin:8px 0 0">Connect Stripe in <a href="#/settings" data-tabset="settings:tab:plans">Settings → Plans &amp; payments</a> to save and charge cards from here.</p>`}`;
 }
 function cardForm(c, k) {
   const isNew = !k; k ||= { name: c.name, brand: 'Visa', processor: db.settings.processor || '', isDefault: !(c.cards || []).length };
@@ -1843,6 +1849,7 @@ function cancelPlanForm(p) {
       : `No cancellation fee: ${inFirstTerm ? `${done} visit${done === 1 ? '' : 's'} already done` : `the first ${+p.termMonths} months are over`}.`}</span></div>` : ''}
     <div class="form-grid">
       ${+p.cancelFee ? `<label class="check full"><input type="checkbox" name="charge" ${applies ? 'checked' : ''}> Charge the ${money(p.cancelFee)} cancellation fee${card ? ` to ${esc(cardLabel(card))}` : ''}</label>` : ''}
+      ${+p.cancelFee && stripeOn() && stripeCard(p.customerId) ? `<label class="check full"><input type="checkbox" name="chargeNow" checked> Charge it now through Stripe (otherwise you can charge it from the invoice)</label>` : ''}
       ${field('Reason', `<select name="reason">${opts(['', 'Moving', 'Price', 'Not happy with service', 'Doing it themselves', 'Switched provider', 'Other'].map(x => [x, x || '—']), '')}</select>`, 'full')}
     </div>`,
     onSubmit: (f, d) => {
@@ -1854,6 +1861,7 @@ function cancelPlanForm(p) {
         const inv = invoiceFromItems({ customerId: p.customerId, items: [{ desc: `Early cancellation fee · service agreement ${p.number}`, details: `Cancelled ${fmtDate(today())}, ${done} of ${p.minVisits} visits completed`, qty: 1, price: +p.cancelFee, taxable: false }] },
           { planId: p.id, dueDate: today(), sent: true, sentAt: today(), isFee: true, notes: `Early cancellation fee per signed service agreement ${p.number}.` });
         p.feeInvoiceId = inv.id; save(); go('#/invoices/' + inv.id);
+        if (d.chargeNow) chargeWithStripe(inv, stripeCard(p.customerId), +p.cancelFee).then(r => { render(); toast(r.ok ? `Cancellation fee of ${money(r.amount)} charged ✓` : `Fee not charged: ${r.error}`); });
         undoToast(snap, card ? `Plan cancelled. Charge ${money(p.cancelFee)} to ${cardLabel(card)}.` : 'Plan cancelled. Fee invoice created.');
       } else { refresh(); undoToast(snap, 'Plan cancelled'); }
     } });
@@ -2175,6 +2183,197 @@ function pinToCustomer(p) {
   return c;
 }
 
+/* =====================================================================
+ * Stripe — through the business's own payment server (stripe-worker/)
+ * ===================================================================== */
+const stripeOn = () => !!(db.settings.stripeUrl && db.settings.stripeToken);
+const BRAND_NAMES = { visa: 'Visa', mastercard: 'Mastercard', amex: 'American Express', discover: 'Discover', interac: 'Interac Debit', jcb: 'JCB', diners: 'Diners Club', unionpay: 'UnionPay' };
+const appBase = () => location.href.split('#')[0].split('?')[0].replace(/index\.html$/, '');
+const doneUrl = kind => `${appBase()}paid.html?t=${kind}&b=${encodeURIComponent(db.settings.businessName || '')}`;
+const toCents = n => Math.round((+n || 0) * 100);
+async function payApi(path, body) {
+  const url = db.settings.stripeUrl.trim().replace(/\/+$/, '') + path;
+  let res;
+  try {
+    res = await fetch(url, { method: body ? 'POST' : 'GET', body: body ? JSON.stringify(body) : undefined,
+      headers: { Authorization: `Bearer ${db.settings.stripeToken.trim()}`, ...(body ? { 'Content-Type': 'application/json' } : {}) } });
+  } catch { throw new Error('Could not reach your payment server. Check your internet connection and the server address in Settings → Plans & payments.'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Payment server error (${res.status})`);
+  return data;
+}
+async function ensureStripeCustomer(c) {
+  if (c.stripeId) return c.stripeId;
+  const r = await payApi('/customers', { name: c.name, email: c.email || undefined, phone: c.phone || undefined, appCustomerId: c.id });
+  c.stripeId = r.id; save(); return r.id;
+}
+/** Pull the customer's saved cards from Stripe. Manual card references are kept. */
+async function syncStripeCards(c) {
+  if (!stripeOn() || !c?.stripeId) return 0;
+  const r = await payApi(`/cards?customer=${encodeURIComponent(c.stripeId)}`);
+  const old = c.cards || [], prevDefault = old.find(k => k.isDefault)?.pmId;
+  const fromStripe = r.cards.map(x => ({ id: 'stripe_' + x.id, pmId: x.id, name: c.name, brand: BRAND_NAMES[x.brand] || (x.brand || 'Card'), last4: x.last4,
+    exp: `${pad(x.exp_month)}/${String(x.exp_year).slice(-2)}`, processor: 'Stripe', wallet: x.wallet, addedAt: old.find(k => k.pmId === x.id)?.addedAt || today() }));
+  c.cards = [...fromStripe, ...old.filter(k => !k.pmId)];
+  c.cards.forEach(k => { k.isDefault = false; });
+  const def = fromStripe.find(k => k.pmId === prevDefault) || fromStripe.find(k => k.pmId === r.defaultCard) || fromStripe[0] || c.cards[0];
+  if (def) def.isDefault = true;
+  c.cardsSyncedAt = Date.now(); save();
+  return fromStripe.length;
+}
+const stripeCard = cid => { const cs = (cust(cid)?.cards || []).filter(k => k.pmId && cardState(k) !== 'expired'); return cs.find(k => k.isDefault) || cs[0]; };
+
+/** Secure Stripe page where the customer types their card. */
+async function stripeCardLink(c) {
+  let link;
+  try { await ensureStripeCustomer(c); link = (await payApi('/card-link', { customer: c.stripeId, currency: db.settings.currency, successUrl: doneUrl('card'), cancelUrl: doneUrl('cancel') })).url; }
+  catch (e) { return alert(e.message); }
+  c.cardLinkAt = Date.now(); save();
+  const msg = `Hi ${firstName(c.name)}, please add your card for ${db.settings.businessName || 'us'} on this secure Stripe page: ${link}`;
+  modal({ title: 'Save a card with Stripe', noFoot: true, body: `
+    <p class="muted small" style="margin-top:0">${esc(c.name)} types their card on Stripe’s secure page. The full number goes straight to Stripe and never touches this app. Once they’re done, the card appears here automatically.</p>
+    <div class="stack" style="gap:8px">
+      <a class="btn btn-primary" href="${esc(link)}" target="_blank" rel="noopener">${icon('expense')}Customer is here: enter the card on this device</a>
+      ${c.phone ? `<a class="btn" href="${smsHref(c.phone, msg)}">${icon('sms')}Text the link to ${esc(c.phone)}</a>` : ''}
+      ${c.email ? `<a class="btn" href="${mailHref(c.email, 'Add your card', msg)}">${icon('mail')}Email the link</a>` : ''}
+      <button type="button" class="btn js-copy">${icon('share')}Copy link</button>
+      <button type="button" class="btn js-refresh">${icon('repeat')}They’re done: refresh cards</button>
+    </div>`,
+    onMount: (f, close) => {
+      $('.js-copy', f).addEventListener('click', async () => { try { await navigator.clipboard.writeText(link); toast('Link copied'); } catch { prompt('Copy this link:', link); } });
+      $('.js-refresh', f).addEventListener('click', async () => {
+        try { const n = await syncStripeCards(c); close(); render(); toast(n ? 'Card saved ✓' : 'No card yet. Ask them to finish on the Stripe page.'); } catch (e) { alert(e.message); }
+      });
+    } });
+}
+
+/** Charge an invoice to a card saved in Stripe. */
+function stripeChargeForm(inv) {
+  const c = cust(inv.customerId), cards = (c.cards || []).filter(k => k.pmId && cardState(k) !== 'expired'), bal = balance(inv);
+  modal({ title: `Charge ${esc(c.name)}`, submitLabel: `Charge ${money(bal)} now`, body: `
+    <div class="form-grid">
+      ${field('Card', `<select name="pm">${opts(cards.map(k => [k.pmId, `${cardLabel(k)} · exp ${k.exp}`]), stripeCard(c.id)?.pmId)}</select>`, 'full')}
+      ${field('Amount', inp('amount', bal.toFixed(2), `type="number" step="0.01" min="0.50" max="${bal.toFixed(2)}" required`))}
+      ${field('For', `<input value="Invoice ${esc(inv.number)}" disabled>`)}
+    </div>
+    <p class="muted small">The money goes to your Stripe account (${esc(db.settings.stripeStatus?.mode === 'live' ? 'live' : 'test mode')}) and Stripe pays it out to your bank. ${c.email ? `Stripe emails ${esc(c.email)} a receipt.` : ''}</p>
+    <div class="js-err"></div>`,
+    onMount: (f, close) => { f._close = close; f.amount.addEventListener('input', () => { $('button[type=submit]', f).textContent = `Charge ${money(+f.amount.value || 0)} now`; }); },
+    onSubmit: (f, d) => {
+      const btnEl = $('button[type=submit]', f), card = cards.find(k => k.pmId === d.pm);
+      btnEl.disabled = true; btnEl.textContent = 'Charging…';
+      chargeWithStripe(inv, card, +d.amount).then(r => {
+        if (r.ok) { f._close(); refresh(); toast(balance(inv) <= 0 ? `Charged ${money(r.amount)} · paid in full 🎉` : `Charged ${money(r.amount)}`); return; }
+        btnEl.disabled = false; btnEl.textContent = `Try again`;
+        $('.js-err', f).innerHTML = `<div class="alert bad" style="margin-top:10px">${icon('alert')}<span><b>Not charged.</b> ${esc(r.error)}
+          ${r.code === 'authentication_required' ? ' Their bank wants them to approve this payment.' : ''} You can send them a pay-online link instead.
+          <button type="button" class="link-btn js-paylink">Send pay link</button></span></div>`;
+        $('.js-paylink', f).addEventListener('click', () => { f._close(); sendPayLink(inv); });
+      });
+      return false;
+    } });
+}
+async function chargeWithStripe(inv, card, amount) {
+  const c = cust(inv.customerId);
+  try {
+    const r = await payApi('/charge', { customer: c.stripeId, paymentMethod: card.pmId, amount: round2(amount), currency: db.settings.currency,
+      description: `Invoice ${inv.number} · ${db.settings.businessName || ''}`.trim(), invoice: inv.number, appInvoiceId: inv.id, receiptEmail: c.email || undefined,
+      idempotencyKey: `${inv.id}-${(inv.payments || []).length}-${toCents(amount)}` });
+    if (r.error) return { ok: false, error: r.error, code: r.code };
+    (inv.payments ||= []).push({ id: uid(), amount: round2(r.amount), date: today(), method: `Card (Stripe) ${cardLabel(card)}`, note: r.id, stripePi: r.id, receiptUrl: r.receiptUrl });
+    inv.sent = true; inv.sentAt ||= today(); save();
+    return { ok: true, amount: r.amount };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
+/** Stripe-hosted "pay this invoice" link. */
+async function ensurePayLink(inv) {
+  const bal = balance(inv);
+  if (inv.checkout?.url && Math.abs(inv.checkout.amount - bal) < 0.005 && Date.now() - inv.checkout.at < 20 * 3600e3) return inv.checkout.url;
+  const c = cust(inv.customerId);
+  if (c) await ensureStripeCustomer(c);
+  const r = await payApi('/pay-link', { amount: bal, currency: db.settings.currency, description: `Invoice ${inv.number} · ${db.settings.businessName || ''}`.trim(),
+    customer: c?.stripeId, email: c?.email, invoice: inv.number, appInvoiceId: inv.id, saveCard: !!db.settings.saveCardOnPay, successUrl: doneUrl('pay'), cancelUrl: doneUrl('cancel') });
+  inv.checkout = { id: r.id, url: r.url, amount: bal, at: Date.now() }; save();
+  return r.url;
+}
+async function sendPayLink(inv) {
+  const c = cust(inv.customerId) || {};
+  let url;
+  try { url = await ensurePayLink(inv); } catch (e) { return alert(e.message); }
+  const msg = docMessage('invoice', inv, 'send', url);
+  modal({ title: `Pay-online link · ${inv.number}`, noFoot: true, body: `
+    <p class="muted small" style="margin-top:0">${esc(c.name || 'Your customer')} pays ${money(balance(inv))} on Stripe’s secure page by card, Apple Pay or Google Pay. The invoice is marked paid when you open it again.</p>
+    <div class="stack" style="gap:8px">
+      ${c.phone ? `<a class="btn btn-primary js-sent" href="${smsHref(c.phone, msg)}">${icon('sms')}Text to ${esc(c.phone)}</a>` : ''}
+      ${c.email ? `<a class="btn ${c.phone ? '' : 'btn-primary'} js-sent" href="${mailHref(c.email, `Invoice ${inv.number} from ${db.settings.businessName || ''}`, msg)}">${icon('mail')}Email to ${esc(c.email)}</a>` : ''}
+      <button type="button" class="btn js-copy">${icon('share')}Copy link</button>
+      <a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Open payment page ↗</a>
+    </div>`,
+    onMount: (f, close) => {
+      $$('.js-sent', f).forEach(a => a.addEventListener('click', () => { inv.sent = true; inv.sentAt ||= today(); save(); setTimeout(() => { close(); render(); }, 200); }));
+      $('.js-copy', f).addEventListener('click', async () => { try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch { prompt('Copy this link:', url); } });
+    } });
+}
+/** Has the customer paid through the link? Records the payment if so. */
+async function checkPayLink(inv, quiet) {
+  if (!stripeOn() || !inv.checkout?.id || inv.checkout.paid) return false;
+  try {
+    const r = await payApi(`/session?id=${encodeURIComponent(inv.checkout.id)}`);
+    if (r.paymentStatus !== 'paid') { if (!quiet) toast('Not paid yet'); return false; }
+    if (!(inv.payments || []).some(p => p.stripePi && p.stripePi === r.paymentIntent)) {
+      (inv.payments ||= []).push({ id: uid(), amount: round2(r.amount), date: today(), method: 'Online (Stripe)', note: r.paymentIntent, stripePi: r.paymentIntent, receiptUrl: r.receiptUrl });
+    }
+    inv.checkout.paid = true;
+    const c = cust(inv.customerId);
+    if (c && r.customer && !c.stripeId) c.stripeId = r.customer;
+    save();
+    if (c && db.settings.saveCardOnPay) syncStripeCards(c).catch(() => {});
+    return true;
+  } catch (e) { if (!quiet) alert(e.message); return false; }
+}
+const refundLeft = (inv, p) => round2(p.amount + sum((inv.payments || []).filter(x => x.refundOf === p.id), x => x.amount));
+async function refundPayment(inv, p) {
+  const left = refundLeft(inv, p);
+  const amt = prompt(`Refund how much? Up to ${money(left)} can be refunded.`, left.toFixed(2));
+  if (amt === null) return;
+  const n = round2(amt);
+  if (!(n > 0 && n <= left)) return alert(`Enter an amount up to ${money(left)}.`);
+  if (!confirm(`Refund ${money(n)} to the customer’s card through Stripe?`)) return;
+  try {
+    const r = await payApi('/refund', { paymentIntent: p.stripePi, amount: n, idempotencyKey: `refund-${p.id}-${toCents(n)}` });
+    inv.payments.push({ id: uid(), amount: -n, date: today(), method: 'Refund (Stripe)', note: r.id, refundOf: p.id });
+    refresh(); toast(`Refunded ${money(n)}`);
+  } catch (e) { alert(e.message); }
+}
+/** When a plan visit is completed: invoice it and charge the card on file (if turned on in Settings). */
+async function autoChargeVisit(j) {
+  const p = byId('subscriptions', j.planId);
+  if (!db.settings.autoChargePlans || !stripeOn() || !p || p.billing !== 'per_visit' || j.invoiceId) return;
+  const card = stripeCard(j.customerId); if (!card) { toast('Visit done. No Stripe card on file to charge.'); return; }
+  const inv = invoiceFromItems(j, { jobId: j.id, planId: p.id, sent: true, sentAt: today(), notes: `Service plan ${p.number} · visit ${fmtDate(j.date)}` });
+  j.invoiceId = inv.id; save();
+  const r = await chargeWithStripe(inv, card, balance(inv));
+  render();
+  toast(r.ok ? `Visit invoiced and ${money(r.amount)} charged to ${cardLabel(card)}` : `Invoice ${inv.number} created, but the charge failed: ${r.error}`);
+}
+async function testStripe() {
+  const st = $('.js-stripe-status');
+  if (st) st.innerHTML = '<span class="muted">Checking…</span>';
+  try {
+    const r = await payApi('/health');
+    db.settings.stripeStatus = { ...r, at: Date.now() }; db.settings.processor = 'Stripe'; save();
+    toast(`Connected to Stripe${r.mode === 'test' ? ' (test mode)' : ''}`); render();
+  } catch (e) { db.settings.stripeStatus = null; save(); if (st) st.innerHTML = `<span style="color:var(--bad)">${esc(e.message)}</span>`; }
+}
+// When you come back to the app (e.g. after the customer finished on Stripe), refresh what's on screen.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !stripeOn() || !state.loaded) return;
+  const [, name, id] = location.hash.split('/');
+  if (name === 'customers' && id) { const c = cust(id); if (c?.stripeId) syncStripeCards(c).then(n => n && render()).catch(() => {}); }
+  if (name === 'invoices' && id) { const inv = byId('invoices', id); if (inv) checkPayLink(inv, true).then(paid => paid && (render(), toast('Paid online ✓'))); }
+});
+
 /* ---------- Customers ---------- */
 VIEWS.customers = id => {
   if (id) return customerDetail(id);
@@ -2241,6 +2440,11 @@ function customerDetail(id) {
 `;
 }
 
+VIEWS.customers.mount = id => {
+  const c = id && cust(id);
+  if (c?.stripeId && stripeOn() && (!c.cardsSyncedAt || Date.now() - c.cardsSyncedAt > 60000))
+    syncStripeCards(c).then(() => { if (location.hash === '#/customers/' + id) render(); }).catch(() => {});
+};
 /* ---------- Customer statement ---------- */
 VIEWS.statement = id => {
   const c = cust(id); if (!c) return empty('users', 'Customer not found.');
@@ -2299,7 +2503,7 @@ function docTable(list, route, statusFn, extraFn) {
 }
 
 /* ---------- Invoices ---------- */
-VIEWS.invoices = id => {
+const invoicesView = id => {
   if (id) return docView('invoice', id);
   const tab = filt('invoices', 'tab', 'unpaid'), q = filt('invoices', 'q', '').toLowerCase();
   const tests = { unpaid: isOpenInv, overdue: x => invStatus(x) === 'overdue', draft: x => invStatus(x) === 'draft', paid: x => invStatus(x) === 'paid', all: () => true };
@@ -2316,6 +2520,11 @@ VIEWS.invoices = id => {
     }) : empty('invoice', 'No invoices here.', btn('New invoice', 'newInvoice', 'btn-sm'))}</div>`;
 };
 
+VIEWS.invoices = invoicesView;
+VIEWS.invoices.mount = id => {
+  const inv = id && byId('invoices', id);
+  if (inv?.checkout && !inv.checkout.paid && stripeOn()) checkPayLink(inv, true).then(paid => { if (paid && location.hash === '#/invoices/' + id) { render(); toast('Paid online ✓'); } });
+};
 /* ---------- Invoice / quote document ---------- */
 const depositAmt = q => +q.depositPct ? round2(totals(q).total * q.depositPct / 100) : 0;
 function docHTML(type, d) {
@@ -2351,11 +2560,12 @@ function docHTML(type, d) {
     ${!isInv ? `<div class="notes" style="margin-top:40px;display:flex;gap:40px;flex-wrap:wrap"><div>Accepted by: ________________________</div><div>Date: ______________</div></div>` : ''}
   </div>`;
 }
-function docMessage(type, d, kind = 'send') {
+function docMessage(type, d, kind = 'send', payUrl = '') {
   const c = cust(d.customerId), t = totals(d);
   const items = (d.items || []).map(it => `• ${it.desc}: ${money(it.qty * it.price)}`).join('\n');
   const vars = { ...custVars(c), number: d.number, total: money(t.total), balance: money(balance(d)), due: d.dueDate ? fmtDate(d.dueDate) : 'on receipt',
     valid: d.validUntil ? fmtDate(d.validUntil) : '30 days', items };
+  if (payUrl) vars.pay = [`Pay securely online: ${payUrl}`, db.settings.paymentInstructions].filter(Boolean).join('\n');
   if (type === 'invoice') return fillTemplate(kind === 'reminder' ? 'tplReminder' : 'tplInvoice', vars);
   return fillTemplate(kind === 'followup' ? 'tplQuoteFollow' : 'tplQuote', vars);
 }
@@ -2391,16 +2601,20 @@ function docView(type, id) {
       !isInv && d.invoiceId && byId('invoices', d.invoiceId) && menuLink('View invoice', `#/invoices/${d.invoiceId}`, 'invoice'),
       isInv && d.quoteId && byId('quotes', d.quoteId) && menuLink('View quote', `#/quotes/${d.quoteId}`, 'quote'),
       isInv && d.planId && byId('subscriptions', d.planId) && menuLink('View service plan', `#/plans/${d.planId}`, 'repeat'),
+      isInv && stripeOn() && !['paid', 'void'].includes(status) && menuItem('Send pay-online link', 'payLink', `data-id="${id}"`, 'share'),
       isInv && status !== 'void' && !pays.length && menuItem('Void invoice', 'voidInvoice', `data-id="${id}" data-type="${type}"`, 'alert'),
       menuItem('Delete', 'deleteDoc', `data-id="${id}" data-type="${type}"`, 'trash', 'danger'),
     ])}</div>
     ${!c.email && !c.phone ? `<div class="alert warn no-print" style="margin:0 auto 12px;max-width:820px">${icon('alert')}<span>This customer has no email or phone saved. <a href="#/customers/${c.id}">Add one</a> to send from here.</span></div>` : ''}
+    ${isInv && d.checkout && !d.checkout.paid && !['paid', 'void'].includes(status) ? `<div class="alert info no-print" style="margin:0 auto 12px;max-width:820px">${icon('share')}<span>Pay-online link created ${fmtDate(iso(new Date(d.checkout.at)))}. <button class="link-btn" data-act="checkPaid" data-id="${id}">Check if paid</button></span></div>` : ''}
     ${depInv ? `<div class="alert info no-print" style="margin:0 auto 12px;max-width:820px">${icon('invoice')}<span>Deposit invoice <a href="#/invoices/${depInv.id}">${esc(depInv.number)}</a> · ${badge(invStatus(depInv))}</span></div>` : ''}
     ${docHTML(type, d)}
     ${isInv ? `<div class="card no-print" style="margin-top:16px;max-width:820px;margin-left:auto;margin-right:auto">
       <div class="card-head"><h2>Payments</h2>${status !== 'paid' && status !== 'void' ? a('Record payment', 'recordPayment', 'btn-sm', 'plus') : ''}</div>
       ${pays.length ? pays.map(p => `<div class="list-item"><div class="grow"><div class="title">${money(p.amount)}</div><div class="muted small">${fmtDate(p.date)} · ${esc(p.method || '')}${p.note ? ' · ' + esc(p.note) : ''}</div></div>
-        <button class="btn btn-sm btn-danger" data-act="deletePayment" data-id="${id}" data-pid="${p.id}">Remove</button></div>`).join('') : '<p class="muted small">No payments recorded yet.</p>'}
+        ${p.receiptUrl ? `<a class="btn btn-sm" href="${esc(p.receiptUrl)}" target="_blank" rel="noopener">Receipt</a>` : ''}
+        ${p.stripePi && p.amount > 0 && stripeOn() && refundLeft(d, p) > 0 ? `<button class="btn btn-sm" data-act="refundPay" data-id="${id}" data-pid="${p.id}">Refund</button>` : ''}
+        <button class="btn btn-sm btn-danger" data-act="deletePayment" data-id="${id}" data-pid="${p.id}" title="Removes the record only. Use Refund to return money.">Remove</button></div>`).join('') : '<p class="muted small">No payments recorded yet.</p>'}
       ${d.sentAt ? `<p class="muted small">Sent ${fmtDate(d.sentAt)}${d.remindedAt ? ` · last reminder ${fmtDate(d.remindedAt)}` : ''}.</p>` : ''}
     </div>` : `${d.sentAt ? `<p class="muted small no-print" style="text-align:center">Sent ${fmtDate(d.sentAt)}.</p>` : ''}`}
 `;
@@ -2599,6 +2813,27 @@ VIEWS.settings = () => {
     ${field('Default invoice note', `<textarea name="invoiceNotes">${esc(s.invoiceNotes)}</textarea>`, 'full')}
     ${field('Default quote note / terms', `<textarea name="quoteNotes">${esc(s.quoteNotes)}</textarea>`, 'full')}
   </div></div>
+  <div class="card ${show('plans')}"><h2>Stripe: charge cards from this app</h2>
+    <p class="muted small">Connect your Stripe account to save customers’ cards securely, charge them in one tap, send pay-online links and refund. Money goes to your Stripe balance and Stripe pays it out to your bank.</p>
+    <div class="stripe-status js-stripe-status">${s.stripeStatus ? `<span class="badge good">Connected</span> <b>${esc(s.stripeStatus.account || '')}</b> · ${s.stripeStatus.mode === 'live' ? '<b>Live mode</b>, real charges' : '<span class="badge warn">Test mode</span> no real money moves'}${s.stripeStatus.chargesEnabled ? '' : ' · <span style="color:var(--bad)">Stripe hasn’t enabled charges yet. Finish your Stripe account setup.</span>'}`
+      : '<span class="badge">Not connected</span>'}</div>
+    <div class="form-grid" style="margin-top:12px">
+      ${field('Payment server address', inp('stripeUrl', s.stripeUrl, 'type="url" placeholder="https://business-hub-pay.yourname.workers.dev"'), 'full')}
+      <div class="field full"><label>App token (the same one you saved as APP_TOKEN)</label>
+        <div class="row" style="flex-wrap:nowrap">${inp('stripeToken', s.stripeToken, 'type="password" autocomplete="off" spellcheck="false"')}
+        <button type="button" class="btn btn-sm js-show-token">Show</button><button type="button" class="btn btn-sm js-gen-token">Generate</button></div></div>
+      <label class="check full"><input type="checkbox" name="autoChargePlans" ${s.autoChargePlans ? 'checked' : ''}> When I complete a service-plan visit, invoice it and charge the card on file automatically</label>
+      <label class="check full"><input type="checkbox" name="saveCardOnPay" ${s.saveCardOnPay ? 'checked' : ''}> Save the customer’s card when they pay an invoice online (so you can charge it next time)</label>
+    </div>
+    <div class="row" style="margin-top:12px">${btn('Save & test connection', 'stripeTestSave', 'btn-primary btn-sm', '', 'check')}
+      <a class="btn btn-sm" href="https://github.com/OnelYonan/1st-github-project/blob/claude/zealous-lovelace-h3cu2y/STRIPE-SETUP.md" target="_blank" rel="noopener">Setup guide ↗</a></div>
+    <details style="margin-top:12px"><summary class="small"><b>How to connect (about 15 minutes)</b></summary><ol class="small setup-steps">
+      <li>Create a free <a href="https://dashboard.stripe.com/register" target="_blank" rel="noopener">Stripe account</a>. Stay in <b>Test mode</b> for now.</li>
+      <li>Create a free <a href="https://dash.cloudflare.com/sign-up" target="_blank" rel="noopener">Cloudflare account</a> → Workers &amp; Pages → Create → Worker → name it <code>business-hub-pay</code> → Deploy.</li>
+      <li>Edit code → replace everything with the code from <code>stripe-worker/worker.js</code> in your repository → Deploy.</li>
+      <li>Worker → Settings → Variables and Secrets: add <b>STRIPE_SECRET_KEY</b> (Secret, from Stripe → Developers → API keys), <b>APP_TOKEN</b> (Secret, tap Generate above and paste it), and <b>ALLOWED_ORIGINS</b> (Text) = <code>${esc(location.origin)}</code>.</li>
+      <li>Paste the Worker’s address above and tap <b>Save &amp; test connection</b>.</li>
+      <li>Try it with Stripe’s test card 4242 4242 4242 4242. When you’re ready, swap in your live secret key.</li></ol></details></div>
   <div class="card ${show('plans')}"><h2>Payments &amp; cards on file</h2>
     <p class="muted small">Cards are saved securely in your payment processor. This app keeps only the card type, last 4 digits and expiry, so it never holds full card numbers.</p>
     <div class="form-grid">
@@ -2653,6 +2888,16 @@ document.addEventListener('click', e => {
   }
 });
 document.addEventListener('click', e => {
+  if (e.target.closest('.js-show-token')) { const i = $('#settingsForm [name=stripeToken]'); i.type = i.type === 'password' ? 'text' : 'password'; e.target.textContent = i.type === 'password' ? 'Show' : 'Hide'; }
+  if (e.target.closest('.js-gen-token')) {
+    const i = $('#settingsForm [name=stripeToken]');
+    if (i.value && !confirm('Replace the current token? You’ll need to update APP_TOKEN in Cloudflare too.')) return;
+    const bytes = crypto.getRandomValues(new Uint8Array(24));
+    i.value = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); i.type = 'text';
+    navigator.clipboard?.writeText(i.value).then(() => toast('Token copied. Paste it as APP_TOKEN in Cloudflare, then Save.'), () => toast('Copy this token into Cloudflare as APP_TOKEN, then Save.'));
+  }
+});
+document.addEventListener('click', e => {
   const b = e.target.closest('[data-settab]'); if (!b) return;
   const k = b.dataset.settab; (state.filters.settings ||= {}).tab = k;
   $$('[data-settab]').forEach(x => x.classList.toggle('active', x === b));
@@ -2670,6 +2915,8 @@ document.addEventListener('submit', e => {
   const cats = (d.categories || '').split('\n').map(x => x.trim()).filter(Boolean);
   delete d.categories;
   for (const k of ['taxRate', 'dueDays', 'mileageRate', 'nextInvoiceNo', 'nextQuoteNo', 'quoteValidDays', 'monthlyGoal', 'nextPlanNo', 'planTermMonths', 'planMinVisits', 'cancelFee']) if (k in d) d[k] = +d[k] || 0;
+  for (const k of ['autoChargePlans', 'saveCardOnPay']) d[k] = !!d[k];
+  if ('stripeUrl' in d) { d.stripeUrl = d.stripeUrl.trim(); d.stripeToken = d.stripeToken.trim(); if (d.stripeUrl !== db.settings.stripeUrl || d.stripeToken !== db.settings.stripeToken) d.stripeStatus = null; }
   if ('planTerms' in d && d.planTerms.trim() === BH.DEFAULT_TERMS.trim()) d.planTerms = '';
   const oldAddress = db.settings.address;
   Object.assign(db.settings, d);
@@ -3135,6 +3382,11 @@ function paymentForm(inv) {
 /* =====================================================================
  * Actions (event delegation)
  * ===================================================================== */
+/** With Stripe connected, invoice messages include a pay-online link. */
+async function payUrlFor(type, d) {
+  if (type !== 'invoice' || !stripeOn() || balance(d) <= 0) return '';
+  try { return await ensurePayLink(d); } catch (e) { toast('Sent without a pay link: ' + e.message); return ''; }
+}
 const docOf = ds => byId(ds.type === 'invoice' ? 'invoices' : 'quotes', ds.id);
 function markSent(type, d) {
   if (type === 'invoice') { d.sent = true; d.sentAt ||= today(); }
@@ -3227,9 +3479,30 @@ const ACTIONS = {
   printPlan: ds => { const p = byId('subscriptions', ds.id), old = document.title; document.title = `Service agreement ${p.number} - ${custName(p.customerId)}`; window.print(); setTimeout(() => { document.title = old; }, 1000); },
   newTemplate: () => templateForm(), editTemplate: ds => templateForm(byId('planTemplates', ds.id)),
   planSettings: () => { (state.filters.settings ||= {}).tab = 'plans'; go('#/settings'); },
-  newCard: ds => cardForm(cust(ds.id)), editCard: ds => { const c = cust(ds.id); cardForm(c, (c.cards || []).find(k => k.id === ds.cid)); },
+  newCard: ds => cardForm(cust(ds.id)),
+  editCard: ds => {
+    const c = cust(ds.id), k = (c.cards || []).find(x => x.id === ds.cid);
+    if (!k?.pmId) return cardForm(c, k);
+    modal({ title: cardLabel(k), noFoot: true, body: `<p class="muted small" style="margin-top:0">Saved securely in Stripe · exp ${esc(k.exp)}${k.wallet ? ' · ' + esc(k.wallet.replace('_', ' ')) : ''}</p>
+      <div class="stack" style="gap:8px">${k.isDefault ? '<span class="badge info" style="align-self:flex-start">Default card</span>' : '<button type="button" class="btn js-def">Make default card</button>'}
+      <button type="button" class="btn btn-danger js-rm">Remove card from Stripe</button></div>`,
+      onMount: (f, close) => {
+        $('.js-def', f)?.addEventListener('click', () => { c.cards.forEach(x => { x.isDefault = x === k; }); close(); refresh(); });
+        $('.js-rm', f).addEventListener('click', async () => {
+          if (!confirm(`Remove ${cardLabel(k)}? You won’t be able to charge it any more.`)) return;
+          try { await payApi('/cards/remove', { paymentMethod: k.pmId }); await syncStripeCards(c); close(); render(); toast('Card removed'); } catch (e) { alert(e.message); }
+        });
+      } });
+  },
   goCustomerCards: ds => go('#/customers/' + ds.id),
-  chargeCard: ds => chargeCard(byId('invoices', ds.id)),
+  chargeCard: ds => { const inv = byId('invoices', ds.id); if (stripeOn() && stripeCard(inv.customerId)) stripeChargeForm(inv); else chargeCard(inv); },
+  payLink: ds => sendPayLink(byId('invoices', ds.id)),
+  checkPaid: ds => { const inv = byId('invoices', ds.id); checkPayLink(inv).then(paid => { if (paid) { render(); toast('Paid online ✓'); } }); },
+  refundPay: ds => { const inv = byId('invoices', ds.id); refundPayment(inv, inv.payments.find(x => x.id === ds.pid)); },
+  stripeCardLink: ds => stripeCardLink(cust(ds.id)),
+  syncCards: ds => syncStripeCards(cust(ds.id)).then(n => { render(); toast(n ? `${n} Stripe card${n > 1 ? 's' : ''} on file` : 'No cards saved in Stripe yet'); }).catch(e => alert(e.message)),
+  stripeTest: () => testStripe(),
+  stripeTestSave: () => { const f = $('#settingsForm'); f.requestSubmit(); setTimeout(() => { if (stripeOn()) testStripe(); else toast('Enter the payment server address and app token first'); }, 50); },
   clockIn: ds => {
     const m = byId('team', ds.id); if (openEntry(m.id)) return;
     const job = db.jobs.find(j => j.date === today() && (j.assignedTo || '').toLowerCase() === m.name.toLowerCase() && j.status !== 'completed');
@@ -3259,7 +3532,8 @@ const ACTIONS = {
     if (ds.s === 'completed') { j.completedAt = today(); if (j.startedAt && !j.finishedAt) j.finishedAt = localStamp(); }
     if (ds.s === 'scheduled') { j.completedAt = ''; }
     refresh();
-    if (ds.s === 'completed' && !j.invoiceId) toast('Job complete — create the invoice while it’s fresh!'); else toast('Status updated');
+    if (ds.s === 'completed' && !j.invoiceId) toast('Job complete. Create the invoice while it’s fresh!'); else toast('Status updated');
+    if (ds.s === 'completed' && j.planId) autoChargeVisit(j);
   },
   toggleNoInvoice: ds => { const j = byId('jobs', ds.id); j.noInvoice = !j.noInvoice; refresh(); },
   deleteJob: ds => {
@@ -3336,20 +3610,20 @@ const ACTIONS = {
     save(); go(`#/${ds.type === 'invoice' ? 'invoices' : 'quotes'}`); undoToast(snap, `${d.number} deleted`);
   },
   markSent: ds => { markSent(ds.type, docOf(ds)); refresh(); toast('Marked as sent'); },
-  docEmail: ds => {
-    const d = docOf(ds), c = cust(d.customerId) || {};
+  docEmail: async ds => {
+    const d = docOf(ds), c = cust(d.customerId) || {}, url = await payUrlFor(ds.type, d);
     const subj = `${ds.type === 'invoice' ? 'Invoice' : 'Quote'} ${d.number} from ${db.settings.businessName || ''}`.trim();
-    location.href = mailHref(c.email, subj, docMessage(ds.type, d));
+    location.href = mailHref(c.email, subj, docMessage(ds.type, d, 'send', url));
     markSent(ds.type, d); save(); setTimeout(render, 400);
     toast('Tip: attach the PDF. Use Print / PDF → Save as PDF.');
   },
-  docText: ds => {
-    const d = docOf(ds), c = cust(d.customerId) || {};
-    location.href = smsHref(c.phone, docMessage(ds.type, d));
+  docText: async ds => {
+    const d = docOf(ds), c = cust(d.customerId) || {}, url = await payUrlFor(ds.type, d);
+    location.href = smsHref(c.phone, docMessage(ds.type, d, 'send', url));
     markSent(ds.type, d); save(); setTimeout(render, 400);
   },
-  docRemind: ds => {
-    const d = docOf(ds), c = cust(d.customerId) || {}, msg = docMessage('invoice', d, 'reminder');
+  docRemind: async ds => {
+    const d = docOf(ds), c = cust(d.customerId) || {}, msg = docMessage('invoice', d, 'reminder', await payUrlFor('invoice', d));
     location.href = c.phone ? smsHref(c.phone, msg) : mailHref(c.email, `Reminder: invoice ${d.number}`, msg);
     d.remindedAt = today(); save(); setTimeout(render, 400);
   },
@@ -3406,7 +3680,7 @@ const ACTIONS = {
   exportMileage: () => { const v = location.hash.includes('reports') ? 'reports' : 'expenses'; const [f, t] = periodRange(filt(v, 'period', v === 'reports' ? 'ytd' : 'this_month'), state.filters[v]);
     download('mileage.csv', csv([['Date', 'Distance (' + db.settings.distanceUnit + ')', 'Purpose', 'Route'], ...db.mileage.filter(m => inRange(m.date, f, t)).map(m => [m.date, m.distance, m.purpose, m.route])])); },
   exportBackup: async () => {
-    const name = `business-hub-backup-${today()}.json`, data = JSON.stringify(db);
+    const name = `business-hub-backup-${today()}.json`, data = JSON.stringify({ ...db, settings: { ...db.settings, stripeToken: '' } });
     db.settings.lastBackup = today(); save();
     const file = typeof File === 'function' ? new File([data], name, { type: 'application/json' }) : null;
     // On phones, the share sheet lets you save straight to Files, Google Drive or email.

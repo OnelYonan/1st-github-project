@@ -739,3 +739,8 @@ a.card.stat:hover { border-color: var(--primary); }
   .addon-row select { grid-column: 1 / 3; grid-row: 2; }
   .addon-row { padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 }
+
+/* ============ v7: Stripe ============ */
+.stripe-status { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); font-size: .9rem; }
+.setup-steps { padding-left: 20px; display: flex; flex-direction: column; gap: 6px; margin: 8px 0 0; }
+.link-btn.small { font-size: .82rem; }
