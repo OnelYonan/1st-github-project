@@ -126,6 +126,7 @@ function normalize(d) {
   const out = { ...b, ...d, settings: { ...b.settings, ...(d.settings || {}) } };
   for (const k of ['customers', 'services', 'jobs', 'quotes', 'invoices', 'expenses', 'incomes', 'mileage', 'categories', 'leads', 'tasks', 'team', 'timeEntries', 'subscriptions', 'planTemplates', 'pins'])
     if (!Array.isArray(out[k])) out[k] = b[k];
+  out.subscriptions.forEach(p => { if (!p.terms && (p.signature || p.status === 'sent')) p.terms = out.settings.planTerms || BH.DEFAULT_TERMS_V1; });
   return out;
 }
 /* Data lives in IndexedDB (hundreds of MB available, so photos are fine).
@@ -1313,14 +1314,67 @@ function activityHTML(c) {
  * ===================================================================== */
 const BILLING = [['per_visit', 'Per visit'], ['monthly', 'Monthly'], ['yearly', 'Yearly'], ['upfront', 'Upfront for the term']];
 const planEnd = p => p.end || addDays(addMonths(p.start, +p.termMonths || 12), -1);
-const planTotal = p => totals(p).total;
+/* ----- plan add-ons: extra services on top of the main one (gutters, interior windows…) ----- */
+const ADDON_WHEN = [['every', 'Every visit'], ['once', 'Once a term']];
+const addonItem = a => ({ desc: a.desc, details: a.details || '', qty: +a.qty || 1, price: +a.price || 0, taxable: a.taxable !== false, addon: a.when || 'every' });
+/** Line items for one visit. The first visit of a term also includes "once" add-ons. */
+const planVisitItems = (p, first = false) => [...(p.items || []), ...(p.addons || []).filter(a => a.when !== 'once' || first).map(addonItem)];
+const planEvery = p => ({ ...p, items: planVisitItems(p) });
+const planOnceItems = p => (p.addons || []).filter(a => a.when === 'once').map(addonItem);
+const planOnceTotal = p => { const once = planOnceItems(p); return once.length ? totals({ items: once, taxRate: p.taxRate }).total : 0; };
+function addonsEditorHTML() {
+  const flagged = db.services.filter(x => x.addon), list = flagged.length ? flagged : db.services;
+  return `<div class="form-section"><h3>Add-ons <span class="muted small">(extra services for this customer)</span></h3>
+    <div class="addon-chips js-addon-chips">${list.map(x => `<button type="button" class="chip-btn" data-svc="${x.id}">${icon('plus')}${esc(x.name)} <span class="muted">${money(x.price)}</span></button>`).join('')}
+      <button type="button" class="chip-btn" data-svc="">${icon('plus')}Custom add-on</button></div>
+    <div class="addon-list js-addons"></div>
+    <div class="addon-sum js-addon-sum"></div></div>`;
+}
+function mountAddons(f, p, getItems) {
+  const addons = (p.addons || []).map(a => ({ ...a }));
+  const box = $('.js-addons', f), sumEl = $('.js-addon-sum', f);
+  const summary = () => {
+    const main = getItems(), every = addons.filter(a => a.when !== 'once' && String(a.desc).trim()).map(addonItem), once = addons.filter(a => a.when === 'once' && String(a.desc).trim()).map(addonItem);
+    const per = totals({ items: [...main, ...every], discount: f.discount?.value, taxRate: f.taxRate?.value });
+    const one = once.length ? totals({ items: once, taxRate: f.taxRate?.value }).total : 0;
+    sumEl.innerHTML = every.length || once.length ? `<b>${money(per.total)}</b> per visit with add-ons${one ? ` · <b>${money(one)}</b> one-time add-ons on the first visit` : ''} <span class="muted">(incl. ${esc(db.settings.taxName)})</span>` : '';
+  };
+  const draw = () => {
+    box.innerHTML = addons.map((a, i) => `<div class="addon-row" data-i="${i}">
+      <input data-k="desc" value="${esc(a.desc)}" placeholder="e.g. Interior windows + track cleaning" aria-label="Add-on">
+      <div class="money-input"><span>${curSymbol()}</span><input data-k="price" type="number" step="0.01" min="0" value="${esc(a.price)}" placeholder="0.00" aria-label="Add-on price"></div>
+      <select data-k="when" aria-label="How often">${opts(ADDON_WHEN, a.when || 'every')}</select>
+      <button type="button" class="btn btn-icon" data-rm-addon="${i}" aria-label="Remove add-on">✕</button></div>`).join('')
+      || '<p class="muted small" style="margin:6px 0 0">No add-ons. Tap one above to add it to this plan.</p>';
+    summary();
+  };
+  const onEdit = e => { const row = e.target.closest('.addon-row'), k = e.target.dataset.k; if (row && k) { addons[+row.dataset.i][k] = e.target.value; summary(); } };
+  box.addEventListener('input', onEdit); box.addEventListener('change', onEdit);
+  box.addEventListener('click', e => { const b = e.target.closest('[data-rm-addon]'); if (b) { addons.splice(+b.dataset.rmAddon, 1); draw(); } });
+  $('.js-addon-chips', f).addEventListener('click', e => {
+    const b = e.target.closest('[data-svc]'); if (!b) return;
+    const x = byId('services', b.dataset.svc);
+    addons.push(x ? { id: uid(), desc: x.name, details: x.description || '', price: x.price, qty: 1, taxable: x.taxable !== false, when: 'every' }
+      : { id: uid(), desc: '', details: '', price: '', qty: 1, taxable: true, when: 'every' });
+    draw(); if (!x) $$('[data-k=desc]', box).pop()?.focus();
+  });
+  f.addEventListener('input', e => { if (!e.target.closest('.js-addons')) summary(); });
+  draw();
+  const get = () => addons.filter(a => String(a.desc).trim()).map(a => ({ id: a.id || uid(), desc: String(a.desc).trim(), details: a.details || '', qty: 1, price: round2(a.price), taxable: a.taxable !== false, when: a.when || 'every' }));
+  get.set = list => { addons.splice(0, addons.length, ...(list || []).map(a => ({ ...a }))); draw(); };
+  return get;
+}
+const addonTag = a => `<span class="addon-tag">Add-on · ${a.addon === 'once' ? 'once a term' : 'every visit'}</span>`;
+
+const planTotal = p => totals(planEvery(p)).total;
 function planPriceLabel(p) {
-  const t = money(planTotal(p));
-  return { per_visit: `${t} per visit`, monthly: `${t} per month`, yearly: `${t} per year`, upfront: `${t} for the ${+p.termMonths || 12}-month term` }[p.billing] || t;
+  const t = money(planTotal(p)), once = planOnceTotal(p);
+  const base = { per_visit: `${t} per visit`, monthly: `${t} per month`, yearly: `${t} per year`, upfront: `${t} for the ${+p.termMonths || 12}-month term` }[p.billing] || t;
+  return once ? `${base} + ${money(once)} one-time add-ons` : base;
 }
 const planVisitDates = (p, from = p.start, to = planEnd(p)) => p.rule ? recurDates(from, { ...p.rule, count: undefined, until: to }) : [];
 function planMonthly(p) {
-  const t = totals(p).sub;
+  const t = totals(planEvery(p)).sub + (planOnceItems(p).length ? totals({ items: planOnceItems(p) }).sub / (+p.termMonths || 12) : 0);
   return { per_visit: t * visitsPerMonth(p.rule), monthly: t, yearly: t / 12, upfront: t / (+p.termMonths || 12) }[p.billing] || 0;
 }
 const planJobs = p => db.jobs.filter(j => j.planId === p.id);
@@ -1340,7 +1394,8 @@ function planTermsText(p) {
 /** Exactly what the customer agrees to; its fingerprint ties a signature to this wording. */
 function planCanonical(p) {
   return [p.number, custName(p.customerId), p.name, planPriceLabel(p), p.rule ? ruleLabel(p.rule) : '', p.start, +p.termMonths || 12,
-    +p.minVisits || 0, +p.cancelFee || 0, p.autoRenew ? 'renew' : '', ...(p.items || []).map(i => `${i.desc}|${i.qty}|${i.price}`), planTermsText(p)].join('\n');
+    +p.minVisits || 0, +p.cancelFee || 0, p.autoRenew ? 'renew' : '', ...(p.items || []).map(i => `${i.desc}|${i.qty}|${i.price}`),
+    ...(p.addons || []).map(a => `+${a.desc}|${a.price}|${a.when}`), planTermsText(p)].join('\n');
 }
 function planSchedule(p) {
   const n = planVisitDates(p).length;
@@ -1411,16 +1466,18 @@ function templateForm(t) {
     ${field('Description (shown on the agreement)', inp('description', t.description), 'full')}
   </div></div>
   ${planTermsFields(t)}
-  <div class="form-section"><h3>What’s included &amp; price</h3>${itemsEditorHTML(t)}</div>`,
+  <div class="form-section"><h3>Main service &amp; price</h3>${itemsEditorHTML(t)}</div>
+  ${addonsEditorHTML()}`,
     footExtra: isNew ? '' : `<button type="button" class="btn btn-danger js-del">Delete</button>`,
     onMount: (f, close) => {
-      t._get = mountItemsEditor(f, t); bindPlanTerms(f, t);
+      t._get = mountItemsEditor(f, t); bindPlanTerms(f, t); t._addons = mountAddons(f, t, () => t._get());
       $('.js-del', f)?.addEventListener('click', () => { const snap = snapshot(); db.planTemplates = db.planTemplates.filter(x => x.id !== t.id); close(); refresh(); undoToast(snap, 'Template deleted'); });
     },
     onSubmit: (f, d) => {
-      const items = t._get(); delete t._get;
+      const items = t._get(), addons = t._addons();
       if (!items.length) { toast('Add at least one service and price'); return false; }
-      Object.assign(t, readPlanTerms(f, d), { name: d.name.trim(), description: d.description, items, discount: +d.discount || 0, taxRate: d.taxRate === '' ? s.taxRate : +d.taxRate });
+      delete t._get; delete t._addons;
+      Object.assign(t, readPlanTerms(f, d), { name: d.name.trim(), description: d.description, items, addons, discount: +d.discount || 0, taxRate: d.taxRate === '' ? s.taxRate : +d.taxRate });
       if (isNew) { t.id = uid(); db.planTemplates.push(t); }
       refresh(); toast('Template saved');
     } });
@@ -1490,12 +1547,13 @@ function planForm(p, preset = {}) {
     ${assigneeField(p.assignedTo)}
   </div></div>
   <div class="js-terms">${planTermsFields(p)}</div>
-  <div class="form-section"><h3>What’s included &amp; price</h3><div class="js-items-wrap">${itemsEditorHTML(p)}</div></div>
+  <div class="form-section"><h3>Main service &amp; price</h3><div class="js-items-wrap">${itemsEditorHTML(p)}</div></div>
+  ${addonsEditorHTML()}
   <details class="form-section"><summary><h3>Terms &amp; conditions <span class="muted small">(tap to review or edit)</span></h3></summary>
     <p class="muted small">Placeholders like {fee} and {term} fill in automatically. Change the default wording in Settings → Plans &amp; payments.</p>
     <textarea name="terms" rows="12">${esc(planTermsRaw(p))}</textarea></details>`,
     onMount: f => {
-      p._get = mountItemsEditor(f, p); bindPlanTerms(f, p);
+      p._get = mountItemsEditor(f, p); bindPlanTerms(f, p); p._addons = mountAddons(f, p, () => p._get());
       bindCustomerSelect(f, nc => { if (nc && !f.address.value) f.address.value = nc.address || ''; });
       f.templateId?.addEventListener('change', () => {
         const t = byId('planTemplates', f.templateId.value); if (!t) return;
@@ -1503,16 +1561,18 @@ function planForm(p, preset = {}) {
         $('.js-terms', f).innerHTML = planTermsFields(t);
         $('.js-items-wrap', f).innerHTML = itemsEditorHTML(t);
         p._get = mountItemsEditor(f, t);
+        p._addons.set(t.addons);
         if (t.terms) f.terms.value = t.terms;
         f.dispatchEvent(new Event('change'));
       });
     },
     onSubmit: (f, d) => {
-      const items = p._get(); delete p._get;
+      const items = p._get(), addons = p._addons();
       if (!items.length) { toast('Add at least one service and price'); return false; }
+      delete p._get; delete p._addons;
       const before = isNew ? '' : planCanonical(p);
       Object.assign(p, readPlanTerms(f, d), { customerId: d.customerId, templateId: d.templateId || p.templateId || '', name: d.name.trim(), address: d.address,
-        start: d.start, assignedTo: d.assignedTo, items, discount: +d.discount || 0, taxRate: d.taxRate === '' ? s.taxRate : +d.taxRate,
+        start: d.start, assignedTo: d.assignedTo, items, addons, discount: +d.discount || 0, taxRate: d.taxRate === '' ? s.taxRate : +d.taxRate,
         terms: d.terms.trim() === (s.planTerms || BH.DEFAULT_TERMS).trim() ? '' : d.terms });
       p.end = '';
       if (isNew) { Object.assign(p, { id: uid(), number: nextPlanNumber(), status: 'draft', createdAt: today() }); db.subscriptions.push(p); }
@@ -1528,7 +1588,7 @@ function nextPlanNumber() {
 
 /* ----- agreement document ----- */
 function planDocHTML(p) {
-  const c = cust(p.customerId) || {}, t = totals(p), s = db.settings;
+  const c = cust(p.customerId) || {}, t = totals(planEvery(p)), s = db.settings, once = planOnceTotal(p);
   return `<div class="doc">
     <div class="doc-top"><div>${bizBlock()}</div>
       <div><h1 style="font-size:22px">SERVICE AGREEMENT</h1>
@@ -1539,11 +1599,12 @@ function planDocHTML(p) {
     <h2 style="font-size:17px;margin:0 0 4px">${esc(p.name)}</h2>
     <p style="margin:0 0 10px;color:#444">${esc(planSchedule(p))}</p>
     <table><thead><tr><th>Included service</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead><tbody>
-      ${(p.items || []).map(it => `<tr><td>${esc(it.desc)}${it.details ? `<div style="color:#666;font-size:12px">${esc(it.details)}</div>` : ''}</td><td class="num">${+it.qty}</td><td class="num">${money(it.price)}</td><td class="num">${money(it.qty * it.price)}</td></tr>`).join('')}
+      ${[...(p.items || []), ...(p.addons || []).map(addonItem)].map(it => `<tr><td>${esc(it.desc)}${it.addon ? ' ' + addonTag(it) : ''}${it.details ? `<div style="color:#666;font-size:12px">${esc(it.details)}</div>` : ''}</td><td class="num">${+it.qty}</td><td class="num">${money(it.price)}</td><td class="num">${money(it.qty * it.price)}</td></tr>`).join('')}
     </tbody></table>
-    <div class="totals"><div><span>Subtotal</span><span>${money(t.sub)}</span></div>${t.disc ? `<div><span>Discount</span><span>−${money(t.disc)}</span></div>` : ''}
+    <div class="totals"><div><span>Subtotal${once ? ' per visit' : ''}</span><span>${money(t.sub)}</span></div>${t.disc ? `<div><span>Discount</span><span>−${money(t.disc)}</span></div>` : ''}
       <div><span>${esc(s.taxName)} (${t.rate}%)</span><span>${money(t.tax)}</span></div>
-      <div class="grand"><span>Price</span><span>${esc(planPriceLabel(p))}</span></div></div>
+      <div class="grand"><span>Price</span><span>${esc(money(planTotal(p)))} ${{ per_visit: 'per visit', monthly: 'per month', yearly: 'per year', upfront: 'per term' }[p.billing] || ''}</span></div>
+      ${once ? `<div><span>One-time add-ons (first visit, incl. tax)</span><span>${money(once)}</span></div>` : ''}</div>
     ${+p.cancelFee ? `<div class="doc-callout"><b>Early cancellation fee: ${money(p.cancelFee)}.</b> Charged to the card on file if the plan is cancelled within the first ${+p.termMonths || 12} months before ${+p.minVisits || 0} visit${+p.minVisits === 1 ? '' : 's'} ${+p.minVisits === 1 ? 'is' : 'are'} completed.</div>` : ''}
     <div class="notes"><div class="lbl">Terms and conditions</div><div style="white-space:pre-wrap">${esc(planTermsText(p))}</div></div>
     <div class="sig-block">
@@ -1562,7 +1623,7 @@ VIEWS.plans = id => {
   if (tab === 'templates') {
     return head('Service plans', headActions, 'Templates for the plans you sell most.') + `<div class="card">${tabs}
       ${db.planTemplates.length ? db.planTemplates.map(t => `<div class="plan-row clickable" data-act="editTemplate" data-id="${t.id}">
-        <div class="grow"><div class="title">${esc(t.name)}</div><div class="muted small">${esc(ruleLabel(t.rule))} · ${+t.termMonths} months${t.autoRenew ? ', auto-renews' : ''} · ${+t.cancelFee ? `${money(t.cancelFee)} early cancellation fee` : 'no cancellation fee'}</div></div>
+        <div class="grow"><div class="title">${esc(t.name)}</div>${(t.addons || []).length ? `<div class="small">+ ${t.addons.map(a => esc(a.desc)).join(', ')}</div>` : ''}<div class="muted small">${esc(ruleLabel(t.rule))} · ${+t.termMonths} months${t.autoRenew ? ', auto-renews' : ''} · ${+t.cancelFee ? `${money(t.cancelFee)} early cancellation fee` : 'no cancellation fee'}</div></div>
         <div class="right"><b class="num">${esc(planPriceLabel(t))}</b></div></div>`).join('')
         : empty('repeat', 'No templates yet. Create one for each plan you sell, like “2 cleans a year”.', btn('New plan template', 'newTemplate', 'btn-sm'))}</div>`;
   }
@@ -1650,6 +1711,7 @@ function signPlanInPerson(p) {
     },
     onSubmit: (f, d) => {
       if (!pad || pad.isEmpty()) { toast('Please sign in the box'); return false; }
+      if (!p.terms) p.terms = planTermsRaw(p);
       BH.fingerprint(planCanonical(p)).then(h => {
         p.signature = { name: d.name.trim(), at: new Date().toISOString(), strokes: pad.strokes.filter(s => s.length > 1), method: 'in_person', hash: h };
         p.cardId = d.cardId || '';
@@ -1666,7 +1728,8 @@ async function planSignLink(p) {
     c: { name: c.name, first: firstName(c.name), address: p.address || c.address || '' },
     p: { name: p.name, price: planPriceLabel(p), schedule: planSchedule(p), start: fmtDate(p.start), term: `${+p.termMonths || 12} months${p.autoRenew ? ', renews automatically' : ''}`,
       termMonths: +p.termMonths || 12, minVisits: +p.minVisits || 0, fee: +p.cancelFee ? money(p.cancelFee) : '',
-      items: (p.items || []).map(i => [i.desc, String(+i.qty), money(i.price)]) },
+      items: [...(p.items || []).map(i => [i.desc, String(+i.qty), money(i.price)]),
+        ...(p.addons || []).map(a => [`Add-on: ${a.desc} (${a.when === 'once' ? 'once a term' : 'every visit'})`, '1', money(a.price)])] },
     t: planTermsText(p), cs: s.cardSetupLink || '',
   };
   return `${base}sign.html#${await BH.pack(payload)}`;
@@ -1674,6 +1737,7 @@ async function planSignLink(p) {
 async function sendPlan(p) {
   const c = cust(p.customerId) || {};
   let link;
+  if (!p.terms) { p.terms = planTermsRaw(p); save(); } // lock the wording the customer will see
   try { link = await planSignLink(p); } catch { return toast('Could not create the signing link in this browser'); }
   const msg = `Hi ${firstName(c.name)}, here is your ${p.name} agreement from ${db.settings.businessName || 'us'}. Please review and sign here: ${link}`;
   const mark = () => { p.status = 'sent'; p.sentAt = today(); save(); setTimeout(render, 300); };
@@ -1714,7 +1778,7 @@ function activatePlan(p) {
   p.status = 'active'; p.activatedAt = today(); p.end = planEnd(p);
   if (!p.seriesId) p.seriesId = uid();
   addPlanVisits(p, p.start, p.end);
-  if (p.billing === 'upfront') billPlan(p, p.start, `${p.name} · ${fmtDate(p.start)} to ${fmtDate(p.end)}`);
+  if (p.billing === 'upfront') billPlan(p, p.start, `${p.name} · ${fmtDate(p.start)} to ${fmtDate(p.end)}`, true);
   if (['monthly', 'yearly'].includes(p.billing)) { p.nextBill = p.start; processPlans(true); }
   (c.log ||= []).push({ id: uid(), date: today(), text: `Signed service agreement ${p.number} (${p.name})` });
   save(); go('#/plans/' + p.id);
@@ -1722,16 +1786,18 @@ function activatePlan(p) {
 }
 function addPlanVisits(p, from, to) {
   const dates = planVisitDates(p, from, to), perVisit = p.billing === 'per_visit';
-  dates.forEach(date => {
+  dates.forEach((date, i) => {
     if (db.jobs.some(j => j.planId === p.id && j.date === date)) return;
+    const visitItems = planVisitItems(p, i === 0);
+    const work = visitItems.map(it => `• ${it.desc}${it.addon ? ' (add-on)' : ''}`).join('\n');
     db.jobs.push({ id: uid(), createdAt: today(), customerId: p.customerId, title: p.name, date, start: '', end: '', address: p.address || cust(p.customerId)?.address || '',
-      assignedTo: p.assignedTo || '', status: 'scheduled', notes: `Service plan ${p.number}`, items: perVisit ? structuredClone(p.items) : [], discount: perVisit ? p.discount : 0,
+      assignedTo: p.assignedTo || '', status: 'scheduled', notes: `Service plan ${p.number}\nThis visit:\n${work}`, items: perVisit ? structuredClone(visitItems) : [], discount: perVisit ? p.discount : 0,
       taxRate: p.taxRate, seriesId: p.seriesId, seriesRule: p.rule, planId: p.id, noInvoice: !perVisit });
   });
   return dates.length;
 }
-function billPlan(p, date, label) {
-  const inv = invoiceFromItems({ customerId: p.customerId, serviceAddress: p.address, items: p.items.map(i => ({ ...i, details: i.details || label })), discount: p.discount, taxRate: p.taxRate },
+function billPlan(p, date, label, first = false) {
+  const inv = invoiceFromItems({ customerId: p.customerId, serviceAddress: p.address, items: planVisitItems(p, first).map(i => ({ ...i, details: i.details || label })), discount: p.discount, taxRate: p.taxRate },
     { planId: p.id, date, dueDate: date, sent: true, sentAt: date, notes: `Service plan ${p.number} · ${label}` });
   return inv;
 }
@@ -1743,7 +1809,7 @@ function processPlans(quiet = false) {
     let guard = 0;
     while (['monthly', 'yearly'].includes(p.billing) && p.nextBill && p.nextBill <= t && p.nextBill <= planEnd(p) && guard++ < 36) {
       const step = p.billing === 'monthly' ? 1 : 12;
-      billPlan(p, p.nextBill, `${p.billing === 'monthly' ? 'Monthly' : 'Yearly'} plan payment · ${fmtDate(p.nextBill)}`);
+      billPlan(p, p.nextBill, `${p.billing === 'monthly' ? 'Monthly' : 'Yearly'} plan payment · ${fmtDate(p.nextBill)}`, p.nextBill === (p.termStart || p.start));
       p.nextBill = addMonths(p.nextBill, step); billed++;
     }
     if (p.autoRenew && planEnd(p) < addDays(t, 30)) { renewPlanTerm(p); renewed++; }
@@ -1756,7 +1822,8 @@ function renewPlanTerm(p) {
   p.renewals = (p.renewals || 0) + 1;
   if (p.status !== 'active') p.status = 'active';
   addPlanVisits(p, from, p.end);
-  if (p.billing === 'upfront') billPlan(p, from, `${p.name} · ${fmtDate(from)} to ${fmtDate(p.end)}`);
+  p.termStart = from;
+  if (p.billing === 'upfront') billPlan(p, from, `${p.name} · ${fmtDate(from)} to ${fmtDate(p.end)}`, true);
   if (['monthly', 'yearly'].includes(p.billing) && (!p.nextBill || p.nextBill < from)) p.nextBill = from;
 }
 function cancelPlanForm(p) {
@@ -1864,7 +1931,7 @@ function knockStats(from, to, rep) {
 }
 const comebacksDue = (until = today()) => db.pins.filter(p => p.status === 'comeback' && (!p.comebackDate || p.comebackDate <= until)).sort((a, b) => (a.comebackDate || '').localeCompare(b.comebackDate || ''));
 
-let leafletP, map, pinLayer, meMarker, geoWatch, lastPos;
+let leafletP, map, mapLayers, pinLayer, meMarker, geoWatch, lastPos;
 function loadLeaflet() {
   return leafletP ||= new Promise((res, rej) => {
     if (window.L) return res(window.L);
@@ -1890,6 +1957,7 @@ VIEWS.canvass = () => {
       `<button class="chip-btn ${show === k ? 'active' : ''}" data-tab="canvass:show:${k}">${k === 'all' ? '' : knockIcon(k, 16)}${l}</button>`).join('')}
       <select data-filter="canvass:when" style="width:auto" aria-label="Show pins from">${opts([['all', 'Any time'], ['today', 'Today'], ['week', 'This week'], ['month', 'This month']], filt('canvass', 'when', 'all'))}</select></div>
     <div class="map-wrap"><div id="canvassMap" class="map"><div class="empty">Loading map…</div></div>
+      <button class="map-style-btn" data-act="mapStyle" aria-label="Switch map style">${state.mapStyle === 'street' ? `${icon('camera')}Satellite` : `${icon('map')}Map`}</button>
       <div class="map-tools">
         <button class="map-btn" data-act="mapLocate" aria-label="Show my location">${icon('route')}</button>
         <button class="btn btn-primary map-pin-btn" data-act="pinHere">${icon('map')}Pin where I’m standing</button>
@@ -1972,7 +2040,16 @@ async function mountMap() {
   const lastPin = db.pins.at(-1);
   const center = state.mapView?.c || (lastPin ? [lastPin.lat, lastPin.lng] : (db.settings.mapCenter || '43.70,-79.42').split(',').map(Number));
   map = L.map(el, { zoomControl: true, tap: true }).setView(center, state.mapView?.z || (lastPin ? 17 : 15));
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(map);
+  const esri = layer => `https://server.arcgisonline.com/ArcGIS/rest/services/${layer}/MapServer/tile/{z}/{y}/{x}`;
+  mapLayers = {
+    street: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }),
+    sat: L.layerGroup([
+      L.tileLayer(esri('World_Imagery'), { maxZoom: 20, maxNativeZoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' }),
+      L.tileLayer(esri('Reference/World_Transportation'), { maxZoom: 20, maxNativeZoom: 19 }),
+      L.tileLayer(esri('Reference/World_Boundaries_and_Places'), { maxZoom: 20, maxNativeZoom: 19 }),
+    ]),
+  };
+  mapLayers[state.mapStyle === 'street' ? 'street' : 'sat'].addTo(map);
   pinLayer = L.layerGroup().addTo(map);
   const thisMap = map; // events can fire after we leave the page; use this instance, not the global
   thisMap.on('moveend', () => { const c = thisMap.getCenter(); state.mapView = { c: [c.lat, c.lng], z: thisMap.getZoom() }; });
@@ -2477,7 +2554,7 @@ VIEWS.reports = () => {
 /* ---------- Price book ---------- */
 VIEWS.services = () => head('Price Book', btn('Add item', 'newService', 'btn-primary', '', 'plus'), 'Save your common services and materials so quotes and invoices take seconds.') + `<div class="card">
   ${db.services.length ? `<div class="table-wrap"><table><thead><tr><th>Name</th><th class="hide-sm">Description</th><th>Unit</th><th>Taxable</th><th class="num">Price</th></tr></thead><tbody>
-  ${[...db.services].sort((a, b) => a.name.localeCompare(b.name)).map(s => `<tr class="clickable" data-act="editService" data-id="${s.id}"><td><b>${esc(s.name)}</b></td><td class="hide-sm muted">${esc(s.description || '')}</td>
+  ${[...db.services].sort((a, b) => a.name.localeCompare(b.name)).map(s => `<tr class="clickable" data-act="editService" data-id="${s.id}"><td><b>${esc(s.name)}</b>${s.addon ? ' <span class="badge info">add-on</span>' : ''}</td><td class="hide-sm muted">${esc(s.description || '')}</td>
     <td>${esc(s.unit || '')}</td><td>${s.taxable !== false ? 'Yes' : 'No'}</td><td class="num">${money(s.price)}</td></tr>`).join('')}
   </tbody></table></div>` : empty('tag', 'Your price book is empty.', btn('Add your first service', 'newService', 'btn-sm'))}</div>`;
 
@@ -2892,11 +2969,12 @@ function serviceForm(s) {
     ${field('Price *', inp('price', s.price, 'type="number" step="0.01" min="0" required'))}
     ${field('Unit', `<select name="unit">${opts(['each', 'hour', 'sq ft', 'ft', 'visit', 'day', 'job'], s.unit)}</select>`)}
     ${field('Description', inp('description', s.description), 'full')}
-    <label class="check full"><input type="checkbox" name="taxable" ${s.taxable !== false ? 'checked' : ''}> Charge ${esc(db.settings.taxName)} on this item</label></div>`,
+    <label class="check full"><input type="checkbox" name="taxable" ${s.taxable !== false ? 'checked' : ''}> Charge ${esc(db.settings.taxName)} on this item</label>
+    <label class="check full"><input type="checkbox" name="addon" ${s.addon ? 'checked' : ''}> Offer as an add-on on service plans</label></div>`,
     footExtra: isNew ? '' : `<button type="button" class="btn btn-danger js-del">Delete</button>`,
     onMount: (f, close) => $('.js-del', f)?.addEventListener('click', () => { const snap = snapshot(); db.services = db.services.filter(x => x.id !== s.id); close(); refresh(); undoToast(snap, 'Item deleted'); }),
     onSubmit: (f, d) => {
-      Object.assign(s, { name: d.name.trim(), price: round2(d.price), unit: d.unit, description: d.description, taxable: !!d.taxable });
+      Object.assign(s, { name: d.name.trim(), price: round2(d.price), unit: d.unit, description: d.description, taxable: !!d.taxable, addon: !!d.addon });
       if (isNew) { s.id = uid(); db.services.push(s); }
       refresh(); toast('Saved');
     } });
@@ -3124,6 +3202,11 @@ const ACTIONS = {
   mapLocate: async () => {
     try { const pos = await currentPosition(); map?.setView(pos, 18); startGeo(false); }
     catch { toast('Location is off. Allow location access for this site in your browser settings.'); }
+  },
+  mapStyle: (ds, el) => {
+    state.mapStyle = state.mapStyle === 'street' ? 'sat' : 'street';
+    if (map && mapLayers) { Object.values(mapLayers).forEach(l => map.removeLayer(l)); mapLayers[state.mapStyle].addTo(map); }
+    el.innerHTML = state.mapStyle === 'street' ? `${icon('camera')}Satellite` : `${icon('map')}Map`;
   },
   statPeriod: ds => { const f = (state.filters.canvassStats ||= {}); f.period = ds.v; f.offset = 0; render(); },
   statMove: ds => { const f = (state.filters.canvassStats ||= {}); f.offset = Math.min(0, (+f.offset || 0) + +ds.n); render(); },
@@ -3468,8 +3551,10 @@ function loadSample() {
   const pick = a => a[Math.floor(rnd() * a.length)];
   const t = today();
   const svc = [['Service call', 95, 'visit'], ['Labour', 85, 'hour'], ['Gutter cleaning', 180, 'job'], ['Window cleaning (exterior)', 240, 'job'],
-    ['Pressure washing – driveway', 220, 'job'], ['Lawn maintenance visit', 65, 'visit'], ['Materials', 1, 'each']];
-  const services = svc.map(([name, price, unit]) => ({ id: uid(), name, price, unit, taxable: true }));
+    ['Pressure washing – driveway', 220, 'job'], ['Lawn maintenance visit', 65, 'visit'], ['Materials', 1, 'each'],
+    ['Interior window cleaning + track cleaning', 120, 'job'], ['Screen cleaning', 40, 'job']];
+  const ADDONS = ['Gutter cleaning', 'Pressure washing – driveway', 'Interior window cleaning + track cleaning', 'Screen cleaning'];
+  const services = svc.map(([name, price, unit]) => ({ id: uid(), name, price, unit, taxable: true, addon: ADDONS.includes(name) }));
   db.services.push(...services.filter(s => !db.services.some(x => x.name === s.name)));
   const people = [['Sarah Mitchell', '14 Maple Cres'], ['David Chen', '88 Lakeview Dr'], ['Priya Patel', '301 Oak Ave'], ['Tom Becker', '5 Birch Lane'],
     ['Maria Rossi', '42 Elm St'], ['James Wilson', '19 Cedar Ct'], ['Aisha Khan', '7 Willow Way'], ['Kevin O’Brien', '260 Pine Rd']];
@@ -3545,14 +3630,15 @@ function loadSample() {
     }
   }
   if (!db.planTemplates.length) {
-    const tpl = { id: uid(), name: 'Window cleaning: 2 cleans a year', description: 'Inside and outside, spring and fall', billing: 'per_visit', termMonths: 12, minVisits: 2,
-      cancelFee: 50, autoRenew: true, rule: { freq: 'month', interval: 6 }, items: [{ desc: 'Window cleaning (exterior)', details: 'All exterior windows, screens and sills', qty: 1, price: 240, taxable: true }], discount: 0, taxRate: db.settings.taxRate };
+    const tpl = { id: uid(), name: 'Window cleaning: 2 cleans a year', description: 'Spring and fall', billing: 'per_visit', termMonths: 12, minVisits: 2,
+      cancelFee: 50, autoRenew: true, rule: { freq: 'month', interval: 6 }, items: [{ desc: 'Window cleaning (exterior)', details: 'All exterior windows, screens and sills', qty: 1, price: 240, taxable: true }], addons: [], discount: 0, taxRate: db.settings.taxRate };
     db.planTemplates.push(tpl,
       { id: uid(), name: 'Lawn care: weekly, May to October', billing: 'monthly', termMonths: 6, minVisits: 4, cancelFee: 50, autoRenew: false, rule: { freq: 'week', interval: 1, weekdays: [3] },
         items: [{ desc: 'Weekly lawn mowing & trimming', details: '', qty: 1, price: 220, taxable: true }], discount: 0, taxRate: db.settings.taxRate });
     const [c1, c2] = [custs[4], custs[6]];
     c1.cards = [{ id: uid(), name: c1.name, brand: 'Visa', last4: '4242', exp: `08/${String(+t.slice(2, 4) + 2)}`, processor: 'Stripe', isDefault: true, addedAt: addMonths(t, -2) }];
-    const signed = { ...structuredClone(tpl), id: uid(), templateId: tpl.id, number: nextPlanNumber(), customerId: c1.id, address: c1.address, start: addMonths(t, -2), status: 'draft', createdAt: addMonths(t, -2), assignedTo: 'Mike' };
+    const signed = { ...structuredClone(tpl), id: uid(), templateId: tpl.id, number: nextPlanNumber(), customerId: c1.id, address: c1.address, start: addMonths(t, -2), status: 'draft', createdAt: addMonths(t, -2), assignedTo: 'Mike',
+      addons: [{ id: uid(), desc: 'Interior window cleaning + track cleaning', details: '', qty: 1, price: 120, taxable: true, when: 'every' }, { id: uid(), desc: 'Gutter cleaning', details: '', qty: 1, price: 180, taxable: true, when: 'once' }] };
     db.subscriptions.push(signed);
     signed.signature = { name: c1.name, at: `${addMonths(t, -2)}T10:15:00.000Z`, method: 'in_person', hash: 'sample', strokes: [[[20, 150], [40, 90], [60, 160], [80, 70], [100, 150], [120, 110]], [[140, 140], [170, 100], [200, 130], [235, 90]]] };
     signed.cardId = c1.cards[0].id; signed.status = 'active'; signed.activatedAt = signed.start; signed.seriesId = uid(); signed.end = planEnd(signed);
@@ -3570,7 +3656,7 @@ function loadSample() {
 window.addEventListener('hashchange', () => { $('#modalRoot').innerHTML = ''; render(); window.scrollTo(0, 0); });
 try { Object.assign(state, JSON.parse(localStorage.getItem('bizhub.ui') || '{}')); } catch { /* ignore */ }
 state.calDay = today(); state.calMonth = today().slice(0, 7); state.tsWeek = '';
-window.addEventListener('pagehide', () => { try { localStorage.setItem('bizhub.ui', JSON.stringify({ calView: state.calView, calTeam: state.calTeam, filters: state.filters })); } catch { /* ignore */ } });
+window.addEventListener('pagehide', () => { try { localStorage.setItem('bizhub.ui', JSON.stringify({ calView: state.calView, calTeam: state.calTeam, filters: state.filters, mapStyle: state.mapStyle })); } catch { /* ignore */ } });
 load().then(d => {
   db = d; state.loaded = true;
   processRecurring();

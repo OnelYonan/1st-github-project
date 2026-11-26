@@ -14,11 +14,11 @@ Your own booking and business-management app for a home-services business: sched
 
 **Sales**
 - **Door knocking** (like SalesRabbit):
-  - Pin every house on a map: ✓ yes / sale, ✗ no, green sheet for quoted, clock for "come back later", house for not home.
+  - Pin every house on a **satellite** or street map: ✓ yes / sale, ✗ no, green sheet for quoted, clock for "come back later", house for not home.
   - Add notes, name, phone and a come-back date to each pin; every pin keeps its full knock history.
   - Stats for any **day, week, month or year**: doors knocked, sales, quotes, come-backs and close rate, by rep.
   - Turn any pin into a lead, customer, quote, job or service plan.
-- **Service plans**: recurring agreements built from templates, with **terms & conditions**, an early-cancellation fee (e.g. $50 if cancelled in the first year before 2 cleans) and auto-renewal.
+- **Service plans**: recurring agreements built from templates, with a main service plus **add-ons** (every visit or once a term), **terms & conditions** (including property-damage and liability limits), an early-cancellation fee (e.g. $50 if cancelled in the first year before 2 cleans) and auto-renewal.
   - Sign **in person** on your phone, or **text or email a signing link**. The customer signs with their finger and sends it back, and the plan activates and schedules the visits.
   - Cancelling checks the term and the visits completed, applies the fee, and offers a one-tap **charge to the card on file**.
 - **Cards on file**: card type, last 4 digits and expiry, linked to the customer's signed charge authorization. Full card numbers stay in your payment processor (Stripe, Square, Helcim…) and are never stored in the app.

@@ -215,8 +215,19 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   await page.selectOption('.modal select[name=templateId]', { index: 1 });
   check(await page.inputValue('.modal input[name=name]') === 'Window cleaning: 2 cleans a year', 'template fills the plan');
   check((await page.textContent('.modal .js-cancel-preview')).includes('$50.00'), 'cancellation preview shows $50 fee');
+  // add-ons: interior windows every visit, gutters once a term, plus a custom one
+  await page.click('.modal .js-addon-chips button:has-text("Interior window cleaning")');
+  await page.click('.modal .js-addon-chips button:has-text("Gutter cleaning")');
+  await page.selectOption('.modal .addon-row >> nth=1 >> select', 'once');
+  await page.click('.modal .js-addon-chips button:has-text("Custom add-on")');
+  await page.fill('.modal .addon-row >> nth=2 >> [data-k=desc]', 'Skylight cleaning'); await page.fill('.modal .addon-row >> nth=2 >> [data-k=price]', '35');
+  const sumText = await page.textContent('.modal .js-addon-sum');
+  check(sumText.includes('$446.35') && sumText.includes('$203.40'), `add-on totals shown (${sumText.trim()})`);
   await page.click('.modal button[type=submit]'); await page.waitForSelector('.doc h1:has-text("SERVICE AGREEMENT")');
   check(await page.isVisible('.doc >> text=Early cancellation fee: $50.00'), 'agreement shows the cancellation clause');
+  check(await page.locator('.doc .addon-tag').count() === 3, 'agreement lists the 3 add-ons');
+  check(await page.isVisible('.doc >> text=One-time add-ons'), 'agreement shows one-time add-ons');
+  check(await page.isVisible('.doc >> text=Pre-existing conditions') && await page.isVisible('.doc >> text=Limitation of liability'), 'terms include damage and liability clauses');
   await page.click('.page-head button:has-text("Sign in person")'); await page.waitForTimeout(150);
   await page.locator('.modal .js-sig').scrollIntoViewIfNeeded(); const box = await page.locator('.modal .js-sig').boundingBox();
   await page.mouse.move(box.x + 30, box.y + 100); await page.mouse.down();
@@ -226,6 +237,9 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   check((await page.textContent('.page-head .badge')).trim() === 'active', 'signing activates the plan');
   check(await page.isVisible('.sig-block svg'), 'signature shows on the agreement');
   check(await page.isVisible('aside >> text=0 of 2 done'), 'plan visits scheduled');
+  const visitItems = await page.evaluate(() => new Promise(r => { const q = indexedDB.open('bizhub'); q.onsuccess = () => { const g = q.result.transaction('kv').objectStore('kv').get('bizhub.v1'); g.onsuccess = () => { const d = JSON.parse(g.result); const p = d.subscriptions.find(x => (x.addons || []).some(a => a.desc === 'Skylight cleaning')); r(d.jobs.filter(j => j.planId === p.id).sort((a, b) => a.date.localeCompare(b.date)).map(j => j.items.map(i => i.desc).join('|'))); }; }; }));
+  check(visitItems.length === 2 && visitItems[0].includes('Gutter cleaning') && !visitItems[1].includes('Gutter cleaning') && visitItems[1].includes('Skylight cleaning'),
+    'first visit includes once-a-term add-on, later visits only every-visit add-ons');
   await shot('plan-signed');
 
   // ---- Service plan: send link, customer signs remotely, signature comes back ----
@@ -277,6 +291,9 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   await page.context().grantPermissions(['geolocation'], { origin: URL.replace(/\/$/, '') });
   await page.context().setGeolocation({ latitude: 43.6702, longitude: -79.4655 });
   await go('#/canvass'); await page.click('[data-tab="canvass:tab:map"]');
+  const styleBefore = await page.textContent('.map-style-btn');
+  await page.click('.map-style-btn');
+  check((await page.textContent('.map-style-btn')).trim() !== styleBefore.trim(), 'map switches between satellite and street view');
   await page.click('button:has-text("Pin where I’m standing")'); await page.waitForSelector('.modal .knock-picker');
   await page.fill('.modal input[name=address]', '12 Maple Cres, Toronto, ON');
   await page.check('.modal input[name=status][value=comeback]', { force: true });

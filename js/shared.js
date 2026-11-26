@@ -83,7 +83,8 @@ class SignaturePad {
 }
 
 /* ----- agreement wording ----- */
-const DEFAULT_TERMS = `1. Services. {business} will provide the services listed in this agreement on the schedule shown.
+// First version, kept so agreements signed or sent with it keep their exact wording.
+const DEFAULT_TERMS_V1 = `1. Services. {business} will provide the services listed in this agreement on the schedule shown.
 2. Term. This agreement starts on {start} and runs for {term} months.{renew}
 3. Payment. You authorize {business} to charge your card on file for the plan price ({price}) and for any other amounts due under this agreement. A receipt will be sent for every charge.
 4. Early cancellation. You may cancel at any time by letting us know. If you cancel within the first {term} months and before {minVisits} services have been completed, an early cancellation fee of {fee} will be charged to your card on file.
@@ -91,5 +92,17 @@ const DEFAULT_TERMS = `1. Services. {business} will provide the services listed 
 6. Satisfaction. If you are not happy with a service, tell us within 48 hours and we will make it right.
 7. Card updates. Please let us know if your card is replaced or expires so your plan is not interrupted.`;
 
-window.BH = { pack, unpack, fingerprint, sigPath, sigSVG, SignaturePad, DEFAULT_TERMS, SIG_W, SIG_H };
+const DEFAULT_TERMS = `1. Services. {business} will provide the services listed in this agreement, including any add-ons, on the schedule shown.
+2. Term. This agreement starts on {start} and runs for {term} months.{renew}
+3. Payment. You authorize {business} to charge your card on file for the plan price ({price}) and for any other amounts due under this agreement. A receipt will be sent for every charge.
+4. Early cancellation. You may cancel at any time by letting us know. If you cancel within the first {term} months and before {minVisits} services have been completed, an early cancellation fee of {fee} will be charged to your card on file.
+5. Scheduling and access. If weather or access prevents a visit, we will contact you to arrange a new date. On service days you agree to give us safe access to the property, keep pets secured, close windows and doors, move fragile or valuable items away from work areas, and tell us about any known problems before we start.
+6. Pre-existing conditions. Many homes have wear or hidden defects that cannot be seen before work begins. {business} is not responsible for damage that results from pre-existing, hidden or worn conditions, including but not limited to: loose, cracked, rotted, warped or improperly installed windows, frames, screens, seals or tracks; failed or fogged window seals; loose, damaged or improperly secured gutters, downspouts, fascia, soffits, siding, shingles or roofing; peeling, oxidized or failing paint, stain or coatings; deteriorated caulking, mortar, wood or concrete; and items that are old, brittle or already damaged.
+7. Water and cleaning products. Window cleaning, gutter cleaning and pressure or soft washing use water and cleaning solutions. {business} is not responsible for water entering through open, unsealed or faulty windows, doors, vents, siding or roofing; for effects on plants, lawns or landscaping when reasonable precautions were taken; or for stains, etching, streaks or discoloration that were already present and become visible after cleaning.
+8. Limitation of liability. To the fullest extent permitted by law, {business} and its owners, employees and subcontractors are not liable for any loss, damage, injury or claim arising from the services, except where caused by our gross negligence or wilful misconduct. Our total liability for any claim is limited to the amount you paid for the service visit in question, and we are not liable for indirect, incidental or consequential losses. By signing, you release {business} from any claim beyond these limits.
+9. Reporting concerns. Any damage or concern must be reported to us in writing, with photos, within 48 hours of the service. We may inspect and, at our option, repair, re-clean or refund that visit. Concerns not reported within 48 hours are waived.
+10. Card updates. Please let us know if your card is replaced or expires so your plan is not interrupted.
+11. Entire agreement. This agreement, including the services and add-ons listed above, is the entire agreement between you and {business}. If any part is found to be unenforceable, the rest remains in effect.`;
+
+window.BH = { pack, unpack, fingerprint, sigPath, sigSVG, SignaturePad, DEFAULT_TERMS, DEFAULT_TERMS_V1, SIG_W, SIG_H };
 })();
