@@ -107,8 +107,8 @@ const DEFAULT_SETTINGS = {
   cleanerPct: 20, salesPct: 25, salesScope: 'first',
   tplInvoice: 'Hi {first}, here is invoice {number} from {business} for {total}, due {due}.\n\n{items}\n\n{pay}\n\nThank you!\n{signature}',
   tplReminder: 'Hi {first}, a friendly reminder that invoice {number} for {balance} was due {due}.\n\n{pay}\n\nIf you have already paid, please ignore this message. Thank you!\n{signature}',
-  tplQuote: 'Hi {first}, thanks for the opportunity! Here is quote {number} from {business} for {total}, valid until {valid}.\n\nView it and approve online: {link}\n\n{signature}',
-  tplQuoteFollow: 'Hi {first}, just following up on quote {number} for {total}. Any questions? Reply any time and we can get you on the schedule.\n{signature}',
+  tplQuote: 'Hi {first}, thanks for the opportunity! Here is your quote from {business} for {total}, valid until {valid}.\n\n{business} quote {number}, tap to view and approve:\n{link}\n\n{signature}',
+  tplQuoteFollow: 'Hi {first}, just following up on your quote for {total}. Any questions? Reply any time and we can get you on the schedule.\n\n{business} quote {number}:\n{link}\n\n{signature}',
   tplAppt: 'Hi {first}, this is {business} confirming your appointment on {date}{time}. See you then!',
   tplOnWay: 'Hi {first}, this is {business}. We are on our way and should arrive in about 20 minutes.',
   tplReview: 'Hi {first}, thanks again for choosing {business}! If you were happy with the work, a quick review would mean a lot to us: {review}',
@@ -130,6 +130,10 @@ function normalize(d) {
   const out = { ...b, ...d, settings: { ...b.settings, ...(d.settings || {}) } };
   for (const k of ['customers', 'services', 'jobs', 'quotes', 'invoices', 'expenses', 'incomes', 'mileage', 'categories', 'leads', 'tasks', 'team', 'timeEntries', 'subscriptions', 'planTemplates', 'pins', 'messages', 'blasts'])
     if (!Array.isArray(out[k])) out[k] = b[k];
+  const OLD_TPL = { tplQuote: 'Hi {first}, thanks for the opportunity! Here is quote {number} from {business} for {total}, valid until {valid}.\n\nView it and approve online: {link}\n\n{signature}',
+    tplQuoteFollow: 'Hi {first}, just following up on quote {number} for {total}. Any questions? Reply any time and we can get you on the schedule.\n{signature}' };
+  OLD_TPL.tplQuote2 = 'Hi {first}, thanks for the opportunity! Here is quote {number} from {business} for {total}, valid until {valid}.\n\n{items}\n\nJust reply to let me know if you would like to go ahead and we will get you booked in.\n{signature}';
+  for (const [k, v] of Object.entries(OLD_TPL)) { const key = k.replace(/\d$/, ''); if (out.settings[key] === v) out.settings[key] = DEFAULT_SETTINGS[key]; }
   out.subscriptions.forEach(p => { if (!p.terms && (p.signature || p.status === 'sent')) p.terms = out.settings.planTerms || BH.DEFAULT_TERMS_V1; });
   return out;
 }
@@ -2080,7 +2084,7 @@ async function sendPlan(p) {
   let link;
   if (!p.terms) { p.terms = planTermsRaw(p); save(); } // lock the wording the customer will see
   try { link = await planSignLink(p); } catch { return toast('Could not create the signing link in this browser'); }
-  const msg = `Hi ${firstName(c.name)}, here is your ${p.name} agreement from ${db.settings.businessName || 'us'}. Please review and sign here: ${link}`;
+  const msg = `Hi ${firstName(c.name)}, here is your ${p.name} agreement from ${db.settings.businessName || 'us'}. Please review and sign.\n\n${db.settings.businessName || 'Your'} service agreement ${p.number}:\n${link}`;
   const mark = () => { p.status = 'sent'; p.sentAt = today(); save(); setTimeout(render, 300); };
   modal({ title: `Send ${p.number} for signature`, noFoot: true, body: `
     <p class="muted small" style="margin-top:0">${esc(c.name)} opens the link, reads the agreement, signs with their finger and taps <b>Send</b>. ${serverHas('inbox') || relayOn() ? 'It comes straight back into this app and the plan starts automatically.' : 'You’ll get a link back. Open it here to record the signature and start the plan.'}</p>
@@ -3450,14 +3454,14 @@ function docMessage(type, d, kind = 'send', payUrl = '') {
   const vars = { ...custVars(c), number: d.number, total: money(t.total), balance: money(balance(d)), due: d.dueDate ? fmtDate(d.dueDate) : 'on receipt',
     valid: d.validUntil ? fmtDate(d.validUntil) : '30 days', items };
   if (type === 'invoice') {
-    if (payUrl) vars.pay = [`Pay securely online: ${payUrl}`, db.settings.paymentInstructions].filter(Boolean).join('\n');
+    if (payUrl) vars.pay = [`${db.settings.businessName || 'Your'} invoice ${d.number}, pay securely online:\n${payUrl}`, db.settings.paymentInstructions].filter(Boolean).join('\n');
     return fillTemplate(kind === 'reminder' ? 'tplReminder' : 'tplInvoice', vars);
   }
   const key = kind === 'followup' ? 'tplQuoteFollow' : 'tplQuote';
   vars.link = payUrl;
   const msg = fillTemplate(key, vars);
   // older saved wording has no {link}: add it so the customer can always approve online
-  return payUrl && !msg.includes(payUrl) ? `${msg}\n\nView it and approve online: ${payUrl}` : msg;
+  return payUrl && !msg.includes(payUrl) ? `${msg}\n\n${db.settings.businessName || 'Your'} quote ${d.number}, tap to view and approve:\n${payUrl}` : msg;
 }
 function docView(type, id) {
   const coll = type === 'invoice' ? 'invoices' : 'quotes';
