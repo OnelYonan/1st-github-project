@@ -19,7 +19,7 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   page.on('console', m => m.type() === 'error' && errors.push(m.text()));
   let acceptDialogs = true;
   page.on('dialog', d => (acceptDialogs ? d.accept() : d.dismiss()));
-  const go = async hash => { await page.goto(URL + hash); await page.waitForSelector('.page-head'); };
+  const go = async hash => { await page.goto(URL + hash); await page.waitForSelector('.page-head, .map-screen'); };
   const shot = async name => shots && page.screenshot({ path: `${shots}/${name}.png`, fullPage: true });
   const modalSubmit = () => page.click('.modal button[type=submit]');
 
@@ -39,7 +39,7 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   // Every page renders
   for (const r of ['schedule', 'jobs', 'leads', 'tasks', 'customers', 'quotes', 'invoices', 'income', 'expenses', 'reports', 'services', 'settings']) {
     await go('#/' + r);
-    check(await page.locator('.page-head h1').count() === 1, `page renders: ${r}`);
+    check(await page.locator('.page-head h1, .map-screen').count() >= 1, `page renders: ${r}`);
     await shot(r);
   }
 
@@ -290,11 +290,12 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   // ---- Door knocking ----
   await page.context().grantPermissions(['geolocation'], { origin: URL.replace(/\/$/, '') });
   await page.context().setGeolocation({ latitude: 43.6702, longitude: -79.4655 });
-  await go('#/canvass'); await page.click('[data-tab="canvass:tab:map"]');
-  const styleBefore = await page.textContent('.map-style-btn');
-  await page.click('.map-style-btn');
-  check((await page.textContent('.map-style-btn')).trim() !== styleBefore.trim(), 'map switches between satellite and street view');
-  await page.click('button:has-text("Pin where I’m standing")'); await page.waitForSelector('.modal .knock-picker');
+  await page.goto(URL + '#/canvass'); await page.waitForSelector('.map-screen, .page-head'); if (await page.isVisible('[data-tab="canvass:tab:map"]')) await page.click('[data-tab="canvass:tab:map"]');
+  check(await page.isVisible('.map-screen'), 'door-knocking map opens full screen');
+  const styleBefore = await page.getAttribute('.map-ctrls .js-style', 'aria-label');
+  await page.click('.map-ctrls .js-style');
+  check((await page.getAttribute('.map-ctrls .js-style', 'aria-label')) !== styleBefore, 'map switches between satellite and street view');
+  await page.click('button:has-text("Pin my spot")'); await page.waitForSelector('.modal .knock-picker');
   await page.fill('.modal input[name=address]', '12 Maple Cres, Toronto, ON');
   await page.check('.modal input[name=status][value=comeback]', { force: true });
   check(await page.isVisible('.modal input[name=comebackDate]'), 'come-back date appears for come back later');

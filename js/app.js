@@ -292,9 +292,9 @@ function toast(msg, action) {
   toastTimer = setTimeout(() => el.remove(), action ? 7000 : 2800);
 }
 
-function modal({ title, body, wide = false, submitLabel = 'Save', onSubmit, onMount, footExtra = '', noFoot = false, focus = true }) {
+function modal({ title, body, wide = false, submitLabel = 'Save', onSubmit, onMount, footExtra = '', noFoot = false, focus = true, cls = '' }) {
   const wrap = document.createElement('div');
-  wrap.className = 'modal-backdrop';
+  wrap.className = 'modal-backdrop ' + cls;
   wrap.innerHTML = `<form class="modal ${wide ? 'wide' : ''}" autocomplete="off" role="dialog" aria-modal="true" aria-label="${esc(title)}">
     <div class="modal-head"><h2>${esc(title)}</h2><button type="button" class="btn btn-icon" data-close aria-label="Close">✕</button></div>
     <div class="modal-body">${body}</div>
@@ -703,6 +703,7 @@ function renderChrome() {
   if (theme) document.documentElement.dataset.theme = theme; else delete document.documentElement.dataset.theme;
 }
 
+let unmountView = null;
 function render() {
   if (!state.loaded) return;
   const [, name = 'dashboard', id] = (location.hash || '#/dashboard').split('/');
@@ -710,9 +711,10 @@ function render() {
   const view = VIEWS[name] || VIEWS.dashboard;
   renderChrome();
   $('#sidebar').classList.remove('open'); $('.scrim')?.remove();
+  if (unmountView) { const u = unmountView; unmountView = null; u(); }
   const html = view(id ? decodeURIComponent(id) : undefined);
   if (html !== undefined) $('#main').innerHTML = html + (id ? '' : fab(name));
-  view.mount?.(id);
+  unmountView = view.mount?.(id) || null;
   document.title = (db.settings.businessName || 'Business Hub');
 }
 const isPhone = () => matchMedia('(max-width: 760px)').matches;
@@ -1964,42 +1966,147 @@ function knockStats(from, to, rep) {
 }
 const comebacksDue = (until = today()) => db.pins.filter(p => p.status === 'comeback' && (!p.comebackDate || p.comebackDate <= until)).sort((a, b) => (a.comebackDate || '').localeCompare(b.comebackDate || ''));
 
-let leafletP, map, mapLayers, pinLayer, meMarker, geoWatch, lastPos;
-function loadLeaflet() {
-  return leafletP ||= new Promise((res, rej) => {
-    if (window.L) return res(window.L);
-    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css'; document.head.append(css);
-    const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
-    s.onload = () => res(window.L); s.onerror = () => { leafletP = null; rej(new Error('offline')); }; document.head.append(s);
+/* Full-screen satellite map (MapLibre GL: rotate, tilt, smooth zoom). */
+let mapLibP, map, geoCtl, lastPos, dropMarker, pinMarkers = [];
+const MAPLIBRE = 'https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl';
+function loadMapLib() {
+  return mapLibP ||= new Promise((res, rej) => {
+    if (window.maplibregl) return res(window.maplibregl);
+    const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = MAPLIBRE + '.css'; document.head.append(css);
+    const s = document.createElement('script'); s.src = MAPLIBRE + '.js';
+    s.onload = () => res(window.maplibregl); s.onerror = () => { mapLibP = null; rej(new Error('offline')); };
+    document.head.append(s);
   });
 }
-function stopGeo() { if (geoWatch != null) navigator.geolocation?.clearWatch(geoWatch); geoWatch = null; }
-window.addEventListener('hashchange', () => { if (!location.hash.startsWith('#/canvass')) { stopGeo(); map = null; } });
+function destroyMap() {
+  pinMarkers = []; dropMarker = null; geoCtl = null;
+  if (map) { try { map.remove(); } catch { /* already gone */ } map = null; }
+  document.body.classList.remove('map-mode');
+}
+const COMPASS = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 15.5 12h-7z" fill="#e5484d"/><path d="M12 21.5 8.5 12h7z" fill="currentColor" opacity=".45"/></svg>';
+const todayLine = () => { const t = today(), td = knockStats(t, t, ''); return `<span class="muted">Today</span> <b>${td.doors}</b> doors · <b>${td.sale}</b> sales · <b>${td.quote}</b> quotes · <b>${td.comeback}</b> come-backs`; };
+const dueBtn = () => { const n = comebacksDue().length; return n ? `<button type="button" class="glass map-due" data-act="showDue">${icon('clock')}${n} come-back${n > 1 ? 's' : ''} due</button>` : ''; };
 
 VIEWS.canvass = () => {
   const tab = filt('canvass', 'tab', 'map');
   const t = today(), td = knockStats(t, t, '');
   const tabs = tabsHTML('canvass', 'tab', [['map', 'Map'], ['stats', 'Stats'], ['list', `Houses (${db.pins.length})`]], tab);
-  const due = comebacksDue();
   const headSub = `Today: <b>${td.doors}</b> doors · <b>${td.sale}</b> sales · <b>${td.quote}</b> quotes · <b>${td.comeback}</b> come-backs`;
   if (tab === 'stats') return head('Door knocking', '', headSub) + `<div class="card">${tabs}${canvassStatsHTML()}</div>`;
   if (tab === 'list') return head('Door knocking', '', headSub) + `<div class="card">${tabs}${canvassListHTML()}</div>`;
-  const show = filt('canvass', 'show', 'all');
-  return head('Door knocking', '', headSub) + `<div class="card canvass-card">${tabs}
-    <div class="canvass-filters">${[['all', 'All'], ...KNOCK_ORDER.map(k => [k, KNOCK[k].short])].map(([k, l]) =>
-      `<button class="chip-btn ${show === k ? 'active' : ''}" data-tab="canvass:show:${k}">${k === 'all' ? '' : knockIcon(k, 16)}${l}</button>`).join('')}
-      <select data-filter="canvass:when" style="width:auto" aria-label="Show pins from">${opts([['all', 'Any time'], ['today', 'Today'], ['week', 'This week'], ['month', 'This month']], filt('canvass', 'when', 'all'))}</select></div>
-    <div class="map-wrap"><div id="canvassMap" class="map"><div class="empty">Loading map…</div></div>
-      <button class="map-style-btn" data-act="mapStyle" aria-label="Switch map style">${state.mapStyle === 'street' ? `${icon('camera')}Satellite` : `${icon('map')}Map`}</button>
-      <div class="map-tools">
-        <button class="map-btn" data-act="mapLocate" aria-label="Show my location">${icon('route')}</button>
-        <button class="btn btn-primary map-pin-btn" data-act="pinHere">${icon('map')}Pin where I’m standing</button>
-      </div>
-      <div class="map-hint">Tap any house on the map to pin it</div></div>
-    ${due.length ? `<div class="due-list"><h3 class="group-label">Come-backs due (${due.length})</h3>${due.slice(0, 8).map(p => pinRow(p)).join('')}</div>` : ''}
+  const show = filt('canvass', 'show', 'all'), sat = state.mapStyle !== 'street';
+  return `<div class="map-screen">
+    <div id="canvassMap" class="map-full"><div class="map-loading">Loading map…</div></div>
+    <div class="map-top">
+      <div class="map-seg glass">${[['map', 'Map'], ['stats', 'Stats'], ['list', 'Houses']].map(([k, l]) => `<button type="button" data-tab="canvass:tab:${k}" class="${k === 'map' ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <div class="map-chips">${[['all', 'All'], ...KNOCK_ORDER.map(k => [k, KNOCK[k].short])].map(([k, l]) =>
+        `<button type="button" class="chip-btn glass ${show === k ? 'active' : ''}" data-act="mapShow" data-v="${k}">${k === 'all' ? '' : knockIcon(k, 16)}${l}</button>`).join('')}
+        <select class="glass js-map-when" aria-label="Show pins from">${opts([['all', 'Any time'], ['today', 'Today'], ['week', 'This week'], ['month', 'This month']], filt('canvass', 'when', 'all'))}</select></div>
+    </div>
+    <div class="map-ctrls glass">
+      <button type="button" data-act="mapStyle" class="js-style" aria-label="${sat ? 'Show street map' : 'Show satellite'}" title="${sat ? 'Street map' : 'Satellite'}">${icon(sat ? 'map' : 'camera')}</button>
+      <button type="button" data-act="mapLocate" aria-label="Show my location" title="My location">${icon('route')}</button>
+      <button type="button" data-act="mapNorth" class="js-compass hidden" aria-label="Point north" title="Point north">${COMPASS}</button>
+    </div>
+    <div class="map-hint js-map-hint">Tap a house to pin it · Two fingers to rotate</div>
+    <div class="map-bottom">
+      <div class="map-stats glass js-map-stats">${todayLine()}</div>
+      <div class="map-actions"><span class="js-due">${dueBtn()}</span><button type="button" class="btn btn-primary map-pin-btn" data-act="pinHere">${icon('map')}Pin my spot</button></div>
+    </div>
   </div>`;
 };
-VIEWS.canvass.mount = () => { if (filt('canvass', 'tab', 'map') === 'map') mountMap(); };
+VIEWS.canvass.mount = () => {
+  if (filt('canvass', 'tab', 'map') !== 'map') return null;
+  document.body.classList.add('map-mode');
+  mountMap();
+  return destroyMap;
+};
+
+async function mountMap() {
+  const el = $('#canvassMap'); if (!el) return;
+  let ml;
+  try { ml = await loadMapLib(); } catch {
+    el.innerHTML = '<div class="map-loading">The map needs an internet connection.<br>You can still use “Pin my spot”. Your pins show up when you’re back online.</div>'; return;
+  }
+  if (!document.body.contains(el) || map) return;
+  const esri = l => `https://server.arcgisonline.com/ArcGIS/rest/services/${l}/MapServer/tile/{z}/{y}/{x}`;
+  const sat = state.mapStyle !== 'street', vis = on => ({ visibility: on ? 'visible' : 'none' });
+  const v = state.mapView || {}, lastPin = db.pins.at(-1);
+  const center = v.c ? [v.c[1], v.c[0]] : lastPin ? [lastPin.lng, lastPin.lat] : (db.settings.mapCenter || '43.70,-79.42').split(',').map(Number).reverse();
+  el.innerHTML = '';
+  let m;
+  try {
+    m = map = new ml.Map({
+      container: el, center, zoom: v.z ?? (lastPin ? 17.5 : 15), bearing: v.b || 0, pitch: v.p || 0, maxZoom: 21, maxPitch: 70,
+      attributionControl: { compact: true }, dragRotate: true, touchPitch: true,
+      style: { version: 8,
+        sources: {
+          sat: { type: 'raster', tiles: [esri('World_Imagery')], tileSize: 256, maxzoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' },
+          roads: { type: 'raster', tiles: [esri('Reference/World_Transportation')], tileSize: 256, maxzoom: 19 },
+          places: { type: 'raster', tiles: [esri('Reference/World_Boundaries_and_Places')], tileSize: 256, maxzoom: 19 },
+          osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, maxzoom: 19, attribution: '© OpenStreetMap contributors' },
+        },
+        layers: [
+          { id: 'osm', type: 'raster', source: 'osm', layout: vis(!sat) },
+          { id: 'sat', type: 'raster', source: 'sat', layout: vis(sat) },
+          { id: 'roads', type: 'raster', source: 'roads', layout: vis(sat) },
+          { id: 'places', type: 'raster', source: 'places', layout: vis(sat) },
+        ] },
+    });
+  } catch {
+    el.innerHTML = '<div class="map-loading">This browser can’t show the 3D map. Try Safari or Chrome.</div>'; return;
+  }
+  geoCtl = new ml.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true, showUserHeading: true, fitBoundsOptions: { maxZoom: 18 } });
+  m.addControl(geoCtl, 'top-left'); // its button is hidden; we trigger it from our own
+  geoCtl.on('geolocate', e => { lastPos = [e.coords.latitude, e.coords.longitude]; });
+  m.on('moveend', () => { const c = m.getCenter(); state.mapView = { c: [c.lat, c.lng], z: m.getZoom(), b: m.getBearing(), p: m.getPitch() }; });
+  const syncCompass = () => {
+    const comp = $('.js-compass'); if (!comp) return;
+    comp.classList.toggle('hidden', Math.abs(m.getBearing()) < 0.5 && m.getPitch() < 0.5);
+    comp.firstElementChild.style.transform = `rotate(${-m.getBearing()}deg)`;
+  };
+  m.on('rotate', syncCompass); m.on('pitch', syncCompass); syncCompass();
+  m.on('click', e => { if (e.originalEvent?.target?.closest?.('.knock-pin')) return; dropPin(e.lngLat.lat, e.lngLat.lng); });
+  m.on('load', () => {
+    drawPins(); if (!v.c && !lastPin) geoCtl.trigger();
+    el.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show'); // credits behind the (i) button
+  });
+  setTimeout(() => $('.js-map-hint')?.classList.add('fade'), 4500);
+}
+function dropPin(lat, lng) {
+  if (map && window.maplibregl) {
+    dropMarker?.remove();
+    const el = document.createElement('div'); el.className = 'drop-pin'; el.innerHTML = '<span></span>';
+    dropMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([lng, lat]).addTo(map);
+    const obs = new MutationObserver(() => { if (!$('#modalRoot').children.length) { dropMarker?.remove(); dropMarker = null; obs.disconnect(); } });
+    setTimeout(() => obs.observe($('#modalRoot'), { childList: true }));
+  }
+  pinForm(null, { lat, lng });
+}
+function drawPins() {
+  if (!map || !window.maplibregl) return;
+  pinMarkers.forEach(mk => mk.remove()); pinMarkers = [];
+  const show = filt('canvass', 'show', 'all'), when = filt('canvass', 'when', 'all');
+  const from = { today: today(), week: addDays(today(), -parseD(today()).getDay()), month: monthStart(today()) }[when] || '';
+  for (const p of db.pins) {
+    if (show !== 'all' && p.status !== show) continue;
+    if (from && ((p.history || []).at(-1)?.at || '').slice(0, 10) < from) continue;
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = 'knock-pin'; el.innerHTML = knockIcon(p.status, 30);
+    el.setAttribute('aria-label', `${KNOCK[p.status]?.label || 'Pin'}: ${p.address || 'house'}`);
+    el.addEventListener('click', e => { e.stopPropagation(); pinForm(p); });
+    pinMarkers.push(new maplibregl.Marker({ element: el }).setLngLat([p.lng, p.lat]).addTo(map));
+  }
+}
+document.addEventListener('change', e => {
+  if (!e.target.classList?.contains('js-map-when')) return;
+  (state.filters.canvass ||= {}).when = e.target.value; drawPins();
+});
+function showDueList() {
+  const due = comebacksDue();
+  modal({ title: `Come-backs due (${due.length})`, noFoot: true, focus: false, body: due.length ? due.map(p => pinRow(p)).join('')
+    + '<p class="muted small" style="margin-top:10px">Tap one to open it. Use Directions to get there.</p>' : '<p class="muted">Nothing due. 🎉</p>' });
+}
 
 function pinRow(p) {
   const last = (p.history || []).at(-1);
@@ -2064,55 +2171,6 @@ function knockBars(rows) {
   return `<div class="chart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Doors knocked">${g}</svg></div>`;
 }
 
-async function mountMap() {
-  const el = $('#canvassMap'); if (!el) return;
-  let L;
-  try { L = await loadLeaflet(); } catch { el.innerHTML = empty('map', 'The map needs an internet connection. Use “Pin where I’m standing” and your pins will show on the map when you are back online.'); return; }
-  if (!document.body.contains(el)) return;
-  el.innerHTML = '';
-  const lastPin = db.pins.at(-1);
-  const center = state.mapView?.c || (lastPin ? [lastPin.lat, lastPin.lng] : (db.settings.mapCenter || '43.70,-79.42').split(',').map(Number));
-  map = L.map(el, { zoomControl: true, tap: true }).setView(center, state.mapView?.z || (lastPin ? 17 : 15));
-  const esri = layer => `https://server.arcgisonline.com/ArcGIS/rest/services/${layer}/MapServer/tile/{z}/{y}/{x}`;
-  mapLayers = {
-    street: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }),
-    sat: L.layerGroup([
-      L.tileLayer(esri('World_Imagery'), { maxZoom: 20, maxNativeZoom: 19, attribution: 'Imagery © Esri, Maxar, Earthstar Geographics' }),
-      L.tileLayer(esri('Reference/World_Transportation'), { maxZoom: 20, maxNativeZoom: 19 }),
-      L.tileLayer(esri('Reference/World_Boundaries_and_Places'), { maxZoom: 20, maxNativeZoom: 19 }),
-    ]),
-  };
-  mapLayers[state.mapStyle === 'street' ? 'street' : 'sat'].addTo(map);
-  pinLayer = L.layerGroup().addTo(map);
-  const thisMap = map; // events can fire after we leave the page; use this instance, not the global
-  thisMap.on('moveend', () => { const c = thisMap.getCenter(); state.mapView = { c: [c.lat, c.lng], z: thisMap.getZoom() }; });
-  map.on('click', e => pinForm(null, { lat: e.latlng.lat, lng: e.latlng.lng }));
-  drawPins();
-  startGeo(!state.mapView && !lastPin);
-}
-function drawPins() {
-  if (!map || !window.L) return;
-  pinLayer.clearLayers();
-  const show = filt('canvass', 'show', 'all'), when = filt('canvass', 'when', 'all');
-  const from = { today: today(), week: addDays(today(), -parseD(today()).getDay()), month: monthStart(today()) }[when] || '';
-  for (const p of db.pins) {
-    if (show !== 'all' && p.status !== show) continue;
-    if (from && ((p.history || []).at(-1)?.at || '').slice(0, 10) < from) continue;
-    const m = L.marker([p.lat, p.lng], { icon: L.divIcon({ className: 'knock-pin', html: knockIcon(p.status, 30), iconSize: [30, 30], iconAnchor: [15, 15] }), title: p.address || '' });
-    m.on('click', e => { L.DomEvent.stopPropagation(e); pinForm(p); });
-    pinLayer.addLayer(m);
-  }
-}
-function startGeo(center) {
-  if (!navigator.geolocation || geoWatch != null) return;
-  geoWatch = navigator.geolocation.watchPosition(pos => {
-    lastPos = [pos.coords.latitude, pos.coords.longitude];
-    if (!map) return;
-    if (!meMarker || !map.hasLayer(meMarker)) meMarker = L.circleMarker(lastPos, { radius: 8, color: '#fff', weight: 3, fillColor: '#1d6fd8', fillOpacity: 1 }).addTo(map);
-    else meMarker.setLatLng(lastPos);
-    if (center) { map.setView(lastPos, 17); center = false; }
-  }, () => {}, { enableHighAccuracy: true, maximumAge: 15000 });
-}
 function currentPosition() {
   return new Promise((res, rej) => {
     if (lastPos) return res(lastPos);
@@ -2129,19 +2187,18 @@ async function reverseAddress(lat, lng) {
 function canvassRefresh() {
   if (location.hash.startsWith('#/canvass') && map && filt('canvass', 'tab', 'map') === 'map') {
     drawPins();
-    const t = today(), td = knockStats(t, t, '');
-    const sub = $('.page-head .muted.small'); if (sub) sub.innerHTML = `Today: <b>${td.doors}</b> doors · <b>${td.sale}</b> sales · <b>${td.quote}</b> quotes · <b>${td.comeback}</b> come-backs`;
-    const due = comebacksDue(), box = $('.due-list');
-    const html = due.length ? `<h3 class="group-label">Come-backs due (${due.length})</h3>${due.slice(0, 8).map(pinRow).join('')}` : '';
-    if (box) box.innerHTML = html; else if (html) $('.canvass-card').insertAdjacentHTML('beforeend', `<div class="due-list">${html}</div>`);
+    const st = $('.js-map-stats'); if (st) st.innerHTML = todayLine();
+    const d = $('.js-due'); if (d) d.innerHTML = dueBtn();
     renderChrome();
   } else render();
 }
-
 function pinForm(p, at) {
   const isNew = !p; p ||= { lat: at.lat, lng: at.lng, status: '', address: '' };
   const hist = (p.history || []).slice().reverse();
-  modal({ title: isNew ? 'Pin this house' : 'House', submitLabel: 'Save', focus: false, body: `
+  // On the full-screen map: half-height card, and slide the map so this house sits above it
+  const onMap = !!map && document.body.classList.contains('map-mode');
+  if (onMap) map.easeTo({ center: [p.lng ?? at.lng, p.lat ?? at.lat], offset: [0, -Math.round(innerHeight * (isPhone() ? 0.24 : 0))], zoom: Math.max(map.getZoom(), 18), duration: 450 });
+  modal({ title: isNew ? 'Pin this house' : 'House', submitLabel: 'Save', focus: false, cls: onMap ? 'half-sheet' : '', body: `
     ${field('Address', addrInput('address', p.address, isNew ? 'placeholder="Finding address…"' : ''))}
     <div class="field" style="margin-top:12px"><label>What happened?</label>
       <div class="knock-picker">${KNOCK_ORDER.map(k => `<label class="knock-opt"><input type="radio" name="status" value="${k}" ${p.status === k ? 'checked' : ''} required>
@@ -3625,18 +3682,31 @@ const ACTIONS = {
   },
   editPin: ds => pinForm(byId('pins', ds.id)),
   pinHere: async () => {
-    try { const [lat, lng] = await currentPosition(); if (map) map.setView([lat, lng], Math.max(map.getZoom(), 18)); pinForm(null, { lat, lng }); }
-    catch { toast('Allow location for this site to pin where you are, or tap the house on the map.'); }
+    try {
+      const [lat, lng] = await currentPosition();
+      if (map) map.easeTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 19), duration: 600 });
+      dropPin(lat, lng);
+    } catch { toast('Allow location for this site to pin where you are, or tap the house on the map.'); }
   },
   mapLocate: async () => {
-    try { const pos = await currentPosition(); map?.setView(pos, 18); startGeo(false); }
+    if (geoCtl) { geoCtl.trigger(); return; }
+    try { const [lat, lng] = await currentPosition(); map?.easeTo({ center: [lng, lat], zoom: 18 }); }
     catch { toast('Location is off. Allow location access for this site in your browser settings.'); }
   },
   mapStyle: (ds, el) => {
     state.mapStyle = state.mapStyle === 'street' ? 'sat' : 'street';
-    if (map && mapLayers) { Object.values(mapLayers).forEach(l => map.removeLayer(l)); mapLayers[state.mapStyle].addTo(map); }
-    el.innerHTML = state.mapStyle === 'street' ? `${icon('camera')}Satellite` : `${icon('map')}Map`;
+    const sat = state.mapStyle !== 'street';
+    if (map?.isStyleLoaded()) { map.setLayoutProperty('osm', 'visibility', sat ? 'none' : 'visible'); ['sat', 'roads', 'places'].forEach(l => map.setLayoutProperty(l, 'visibility', sat ? 'visible' : 'none')); }
+    el.innerHTML = icon(sat ? 'map' : 'camera'); el.setAttribute('aria-label', sat ? 'Show street map' : 'Show satellite');
+    toast(sat ? 'Satellite view' : 'Street map');
   },
+  mapNorth: () => map?.easeTo({ bearing: 0, pitch: 0, duration: 500 }),
+  mapShow: (ds, el) => {
+    (state.filters.canvass ||= {}).show = ds.v;
+    $$('.map-chips .chip-btn').forEach(b => b.classList.toggle('active', b === el));
+    drawPins();
+  },
+  showDue: () => showDueList(),
   statPeriod: ds => { const f = (state.filters.canvassStats ||= {}); f.period = ds.v; f.offset = 0; render(); },
   statMove: ds => { const f = (state.filters.canvassStats ||= {}); f.offset = Math.min(0, (+f.offset || 0) + +ds.n); render(); },
   newPlan: ds => planForm(null, { customerId: ds.cust }), editPlan: ds => planForm(byId('subscriptions', ds.id)),

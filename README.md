@@ -14,7 +14,7 @@ Your own booking and business-management app for a home-services business: sched
 
 **Sales**
 - **Door knocking** (like SalesRabbit):
-  - Pin every house on a **satellite** or street map: ✓ yes / sale, ✗ no, green sheet for quoted, clock for "come back later", house for not home.
+  - A full-screen **satellite** map (or street map) you can rotate, tilt and zoom like Apple Maps. Tap any house to pin it: ✓ yes / sale, ✗ no, green sheet for quoted, clock for "come back later", house for not home.
   - Add notes, name, phone and a come-back date to each pin; every pin keeps its full knock history.
   - Stats for any **day, week, month or year**: doors knocked, sales, quotes, come-backs and close rate, by rep.
   - Turn any pin into a lead, customer, quote, job or service plan.

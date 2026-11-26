@@ -43,7 +43,7 @@ const findOverflow = () => {
     if (o.length) { problems++; console.log(`✗ ${label}\n   ${o.join('\n   ')}`); } else console.log(`✓ ${label}`);
     if (shots) await page.screenshot({ path: `${shots}/${String(n).padStart(2, '0')}-${label.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.png` });
   };
-  const go = async hash => { await page.goto(URL + hash); await page.waitForSelector('.page-head', { timeout: 15000 }); };
+  const go = async hash => { await page.goto(URL + hash); await page.waitForSelector('.page-head, .map-screen', { timeout: 15000 }); };
   const closeModal = async () => { await page.evaluate(() => document.querySelectorAll('#modalRoot > *').forEach(m => m.remove())); };
   const menu = async label => { const m = page.locator('[data-menu]').first(); if (await m.count()) { await m.click(); await audit(label + ' · More menu'); await page.mouse.click(5, 300); } };
   const openFirst = async (sel, label) => { const el = page.locator(sel).first(); if (await el.count()) { await el.click(); await page.waitForTimeout(250); await audit(label); return true; } return false; };
