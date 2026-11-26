@@ -34,7 +34,7 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
   const dbGet = expr => raw(`return ${expr}`, false);
 
   await page.goto(URL); await page.waitForSelector('.page-head');
-  await page.click('button:has-text("Load sample data")'); await page.waitForTimeout(500);
+  await page.click('button:has-text("Load sample data")'); await page.waitForTimeout(500); await idb(`d.settings.relayUrl = '${PAY}/relay';`);
 
   /* ---------- map time filter ---------- */
   await go('#/canvass');
@@ -92,7 +92,7 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
   await cust.waitForSelector('.sign-done h2');
   check((await cust.textContent('.sign-done')).includes('has your approval'), 'approval goes straight to the business (no link to send back)');
   await cust.close();
-  await go('#/messages'); await page.click('button:has-text("Check for replies")'); await page.waitForTimeout(800);
+  await go('#/messages'); await page.click('button:has-text("Check for updates")'); await page.waitForTimeout(800);
   const q = await dbGet(`d.quotes.find(x => x.id === 'qtest1')`);
   check(q.status === 'approved' && q.signature?.name === 'Maria Rossi' && q.signature.strokes.length > 0, 'quote marked approved with the signature');
   check(q.items[1].on === true, 'the extra the customer ticked is now included');
@@ -105,7 +105,7 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
 
   /* ---------- request changes, without a server (link back) ---------- */
   await idb(`d.quotes.push({ id: 'qtest2', number: 'Q-9002', customerId: d.customers[1].id, date: '2026-11-20', status: 'sent', taxRate: 13, items: [{ desc: 'Screens', qty: 4, price: 10, taxable: true }] });
-    d.settings.stripeStatusBak = d.settings.stripeStatus; d.settings.stripeStatus = null;`);
+    d.settings.stripeStatusBak = d.settings.stripeStatus; d.settings.stripeStatus = null; d.settings.relay = false;`);
   await go('#/quotes/qtest2'); await page.click('.doc-actions [data-menu]');
   const [c2] = await Promise.all([ctx.waitForEvent('page'), page.click('.menu-item:has-text("Preview what the customer sees")')]);
   await c2.waitForSelector('#askChanges'); await c2.click('#askChanges');
@@ -116,7 +116,7 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
   const q2 = await dbGet(`d.quotes.find(x => x.id === 'qtest2')`);
   check(q2.changeRequest?.msg === 'Please add the garage windows' && page.url().includes('#/quotes/qtest2'), 'change request recorded from the link');
   check(await dbGet(`d.tasks.some(t => t.title.includes('Q-9002'))`), 'a to-do reminds you to update the quote');
-  await idb(`d.settings.stripeStatus = d.settings.stripeStatusBak;`);
+  await idb(`d.settings.stripeStatus = d.settings.stripeStatusBak; d.settings.relay = true;`);
 
   /* ---------- texting ---------- */
   const before = (await mock('/__mock/sms-log')).length;
@@ -129,7 +129,7 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
   check(page.url().includes('#/messages/' + mariaId) && await page.locator('.bubble.out').count() >= 1, 'conversation opens with the sent text');
   check((await mock('/__mock/sms-in?from=%2B14165550138&body=Sounds%20good&badsig=1')).status === 403, 'server rejects texts not signed by Twilio');
   check((await mock('/__mock/sms-in?from=%2B14165550138&body=Sounds%20good')).status === 200, 'server accepts a signed reply');
-  await go('#/messages'); await page.click('button:has-text("Check for replies")'); await page.waitForTimeout(700);
+  await go('#/messages'); await page.click('button:has-text("Check for updates")'); await page.waitForTimeout(700);
   check(await page.locator('.thread-row.unread').count() === 1 && (await page.textContent('.thread-row.unread')).includes('Sounds good'), 'reply shows as unread in Messages');
   await page.click('.thread-row.unread'); await page.waitForTimeout(400);
   check(await page.locator('.bubble.in').count() === 1 && await dbGet(`d.messages.every(m => m.read || m.dir === 'out')`), 'opening the conversation marks it read');
@@ -140,7 +140,7 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
 
   /* ---------- STOP and promo blast ---------- */
   await mock('/__mock/sms-in?from=%2B14165550152&body=STOP'); // Aisha Khan opts out
-  await go('#/messages'); await page.click('button:has-text("Check for replies")'); await page.waitForTimeout(600);
+  await go('#/messages'); await page.click('button:has-text("Check for updates")'); await page.waitForTimeout(600);
   check(await dbGet(`d.customers.find(x => x.name === 'Aisha Khan').noPromo === true`), 'STOP reply opts the customer out of promotions');
   await idb(`d.customers.find(x => x.name === 'David Chen').phone = '416-555-0199';`); // carrier says this number unsubscribed
   const withPhone = await dbGet(`d.customers.filter(c => c.phone && !c.noPromo).length`);
@@ -158,6 +158,54 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
   check(await dbGet(`d.customers.find(x => x.name === 'David Chen').noPromo === true`), 'unsubscribed number is marked “no promotions”');
   await shot(page, 'blasts');
 
+  /* ---------- no server: approvals still arrive by themselves (encrypted relay) ---------- */
+  await idb(`d.settings.stripeUrl = ''; d.settings.stripeToken = ''; d.settings.stripeStatus = null; d.settings.relayUrl = '${PAY}/relay';
+    d.quotes.push({ id: 'qtest3', number: 'Q-9003', customerId: d.customers[2].id, date: '2026-11-21', status: 'sent', sentAt: '2026-11-21', taxRate: 13,
+      items: [{ desc: 'Window cleaning', qty: 1, price: 300, taxable: true }, { desc: 'Screens', qty: 1, price: 40, taxable: true, optional: true }] });`);
+  await go('#/quotes/qtest3'); await page.click('.doc-actions [data-menu]');
+  const [c3] = await Promise.all([ctx.waitForEvent('page'), page.click('.menu-item:has-text("Preview what the customer sees")')]);
+  await c3.waitForSelector('.qline'); c3.on('pageerror', e => errors.push('quote page 3: ' + e.message));
+  await c3.click('.qopt .grow');
+  await c3.locator('#sig').scrollIntoViewIfNeeded();
+  const b3 = await c3.locator('#sig').boundingBox();
+  await c3.mouse.move(b3.x + 20, b3.y + 40); await c3.mouse.down(); await c3.mouse.move(b3.x + 160, b3.y + 60, { steps: 10 }); await c3.mouse.up();
+  await c3.check('#agree'); await c3.click('#signBtn'); await c3.waitForSelector('.sign-done h2');
+  check((await c3.textContent('.sign-done')).includes('has your approval') && await c3.locator('#backLink').count() === 0, 'without a server, approval still goes straight to the business');
+  await c3.close();
+  const relayed = await fetch(`${PAY}/relay/${await dbGet('d.settings.relayTopic')}/json?poll=1`).then(r => r.text());
+  check(!relayed.includes('Window cleaning') && !relayed.includes(await dbGet('d.customers[2].name')), 'relay only sees scrambled text');
+  await page.waitForSelector('.js-waiting'); await page.click('.js-waiting [data-act="checkInbox"]'); await page.waitForTimeout(900);
+  const q3 = await dbGet(`d.quotes.find(x => x.id === 'qtest3')`);
+  check(q3.status === 'approved' && q3.items[1].on === true && q3.signature?.strokes?.length > 0, 'approval arrived automatically, with the extra and signature');
+  check((await page.textContent('#main')).includes('Approved online'), 'quote screen updated by itself');
+
+  /* ---------- quotes: edit and delete ---------- */
+  await go('#/quotes/qtest2');
+  check(await page.locator('.doc-actions > [data-act="editDoc"]').count() === 1, 'Edit button is right on the quote');
+  await page.click('.doc-actions [data-menu]'); await page.click('.menu-item:has-text("Delete")'); await page.waitForTimeout(400);
+  check(!(await dbGet(`d.quotes.some(x => x.id === 'qtest2')`)) && page.url().endsWith('#/quotes'), 'quote deleted');
+
+  /* ---------- phone layout ---------- */
+  {
+    const ph = await browser.newContext({ ...require('playwright').devices['iPhone 14'] });
+    const pp = await ph.newPage(); pp.on('pageerror', e => errors.push('phone2: ' + e.message)); pp.on('dialog', d => d.accept());
+    await pp.goto(URL); await pp.waitForSelector('.page-head');
+    await pp.click('button:has-text("Load sample data")'); await pp.waitForTimeout(300);
+    await pp.goto(URL + '#/quotes'); await pp.waitForTimeout(300);
+    await pp.locator('.show-sm .list-item').first().tap(); await pp.waitForTimeout(500);
+    await pp.tap('.doc-actions [data-menu]'); await pp.waitForTimeout(400);
+    check(await pp.locator('body > .sheet-backdrop .action-sheet .menu-item:has-text("Delete")').isVisible(), 'iPhone: More opens an action sheet at the top of the page');
+    await pp.tap('.action-sheet .menu-item:has-text("Delete")'); await pp.waitForTimeout(500);
+    check(await pp.locator('.sheet-backdrop').count() === 0 && pp.url().endsWith('#/quotes'), 'iPhone: Delete in the sheet works and the sheet closes');
+    check(await pp.isVisible('#menuBtn'), 'iPhone: ☰ button top left');
+    await pp.tap('#menuBtn'); await pp.waitForTimeout(450);
+    const sb = await pp.evaluate(() => { const r = document.querySelector('#sidebar').getBoundingClientRect(); return [r.left, r.width, getComputedStyle(document.querySelector('#sidebar')).visibility]; });
+    check(sb[0] >= -1 && sb[1] > 250 && sb[2] === 'visible', 'iPhone: ☰ slides out the menu');
+    if (shots) await pp.screenshot({ path: `${shots}/drawer.png` });
+    await pp.tap('#sidebar a[href="#/customers"]'); await pp.waitForTimeout(500);
+    check(pp.url().endsWith('#/customers') && !(await pp.evaluate(() => document.querySelector('#sidebar').classList.contains('open'))), 'iPhone: picking a section closes the menu');
+    await ph.close();
+  }
   /* ---------- phone layout ---------- */
   const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   const p2 = await phone.newPage(); p2.on('pageerror', e => errors.push('phone: ' + e.message));

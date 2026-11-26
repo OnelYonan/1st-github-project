@@ -245,6 +245,9 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   await shot('plan-signed');
 
   // ---- Service plan: send link, customer signs remotely, signature comes back ----
+  // (instant updates off here, to test the manual "send the link back" path; tests/connect.js covers the automatic one)
+  await go('#/settings'); await page.click('[data-settab=plans]'); await page.uncheck('#settingsForm [name=relay]');
+  await page.click('#settingsForm button[type=submit]'); await page.waitForTimeout(150);
   await go('#/plans'); await page.click('.plan-row:has-text("Waiting for signature"), .plan-row:has-text("Sent")');
   await page.waitForSelector('.doc');
   await page.click('.page-head button:has-text("for signature")');

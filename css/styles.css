@@ -1519,3 +1519,58 @@ input[type=file]::file-selector-button {
 .q-changes { margin-top: 14px; text-align: center; }
 .sign-card .totals { margin-top: 10px; }
 .qline .grow { flex: 1; min-width: 0; }
+
+/* ============ v13: phone action sheets (top level), ☰ drawer ============ */
+@keyframes sheetFadeOut { to { opacity: 0; } }
+.sheet-backdrop {
+  position: fixed; inset: 0; z-index: 90; background: rgba(0, 0, 0, .4); display: flex; flex-direction: column; justify-content: flex-end;
+  padding: 0 max(8px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); animation: fadeIn .15s;
+}
+.sheet-backdrop.closing { animation: sheetFadeOut .18s forwards; pointer-events: none; }
+.action-sheet { display: flex; flex-direction: column; max-height: 82dvh; overflow-y: auto; overscroll-behavior: contain; animation: sheetUp .32s cubic-bezier(.2, .9, .25, 1); }
+.action-sheet .menu-item {
+  display: flex; align-items: center; gap: 14px; width: 100%; border: none; text-align: left; font: inherit; cursor: pointer; text-decoration: none;
+  background: rgba(250, 250, 252, .96); -webkit-backdrop-filter: saturate(180%) blur(30px); backdrop-filter: saturate(180%) blur(30px);
+  padding: 16px 18px; font-size: 1.0625rem; color: var(--primary); border-bottom: .5px solid var(--hairline); border-radius: 0;
+}
+:root[data-theme="dark"] .action-sheet .menu-item { background: rgba(44, 44, 46, .96); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .action-sheet .menu-item { background: rgba(44, 44, 46, .96); } }
+.action-sheet .menu-item svg { width: 21px; height: 21px; color: currentColor; flex-shrink: 0; }
+.action-sheet .menu-item.danger { color: var(--bad); }
+.action-sheet .menu-item:active { background: var(--surface-3); }
+.action-sheet .menu-item:first-child { border-radius: 14px 14px 0 0; }
+.action-sheet .menu-item:nth-last-child(2) { border-radius: 0 0 14px 14px; border-bottom: none; }
+.action-sheet .menu-item:first-child:nth-last-child(2) { border-radius: 14px; }
+.action-sheet .menu-cancel { display: flex; justify-content: center; margin-top: 8px; border-radius: 14px !important; font-weight: 650; background: var(--surface) !important; border: none; position: sticky; bottom: 0; }
+
+@media (max-width: 760px) {
+  /* ☰ button, top left */
+  .mobile-bar #menuBtn { display: grid; place-items: center; order: -1; width: 40px; height: 40px; min-width: 40px; padding: 0; margin-left: -6px; color: var(--primary); background: none; border: none; }
+  .mobile-bar #menuBtn svg { width: 24px; height: 24px; stroke-width: 2.2; }
+  body.has-back .nb-back span { max-width: 26vw; }
+  /* slide-out drawer with every section */
+  .sidebar {
+    width: min(84vw, 330px); visibility: hidden; transform: translateX(-104%);
+    transition: transform .32s cubic-bezier(.2, .9, .25, 1), visibility 0s .32s; z-index: 60;
+    background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none;
+    padding: calc(env(safe-area-inset-top) + 14px) 12px calc(env(safe-area-inset-bottom) + 20px) max(12px, env(safe-area-inset-left));
+    box-shadow: none; border-right: none; height: 100dvh; overscroll-behavior: contain;
+  }
+  .sidebar.open { visibility: visible; transform: none; transition: transform .32s cubic-bezier(.2, .9, .25, 1), visibility 0s; box-shadow: 0 0 60px rgba(0, 0, 0, .3); }
+  .scrim { z-index: 55; background: rgba(0, 0, 0, .38); animation: fadeIn .2s; }
+  .sidebar .brand { font-size: 1.15rem; padding: 4px 8px 16px; }
+  .sidebar .nav a { padding: 9px 10px; font-size: 1.02rem; gap: 13px; }
+  .sidebar .nav-ic { width: 30px; height: 30px; border-radius: 8px; }
+  .sidebar .nav .nav-ic svg { width: 17px; height: 17px; }
+  .sidebar .search-btn { padding: 10px 12px; font-size: 1rem; }
+  .sidebar .search-btn kbd { display: none; }
+  .sidebar .clock-btn { padding: 10px 12px; font-size: 1rem; }
+}
+.action-sheet .menu-item:hover, .action-sheet .menu-item:focus-visible { background: rgba(250, 250, 252, .96); color: var(--primary); }
+.action-sheet .menu-item.danger:hover, .action-sheet .menu-item.danger:focus-visible { background: rgba(250, 250, 252, .96); color: var(--bad); }
+.action-sheet .menu-item:hover svg { color: currentColor; }
+:root[data-theme="dark"] .action-sheet .menu-item:hover, :root[data-theme="dark"] .action-sheet .menu-item.danger:hover { background: rgba(44, 44, 46, .96); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .action-sheet .menu-item:hover, :root:not([data-theme="light"]) .action-sheet .menu-item.danger:hover { background: rgba(44, 44, 46, .96); } }
+.action-sheet .menu-item:active { background: var(--surface-3) !important; }
+.action-sheet .menu-cancel:hover { background: var(--surface) !important; }
+.action-sheet .menu-item svg, .action-sheet .menu-item:hover svg { background: none !important; }

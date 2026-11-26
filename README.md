@@ -21,7 +21,7 @@ A booking and business app for a home-services business (window cleaning, gutter
 - **Leads**: a pipeline board with stages you can rename.
 - **Customers**: activity timeline, notes, cards on file, statements and CSV import.
 - **Quotes and invoices**: deposits, reminders, pay-online links and PDF.
-- **Online quote approval**: customers get a link to their quote, tick any optional extras, sign and approve, or ask for changes. With the server connected, approvals land in the app automatically and a deposit invoice is created.
+- **Online quote approval**: customers get a link to their quote, tick any optional extras, sign and approve, or ask for changes. Approvals and signed agreements arrive in the app automatically (checked every 30 seconds while it's open), end-to-end encrypted through the free ntfy.sh relay, or through your own server if you connected one. A deposit invoice is created when needed. If the relay can't be reached, the customer gets a link to text back instead.
 - **Messages**: a conversation for each customer, quick templates, and **promo blasts** to all customers, plan customers, lapsed customers or a tag, with STOP opt-outs handled for you. With Twilio connected, texts go from your business number and replies show up in the app.
 - **Service plans**: signed agreements.
   - Templates with a main service plus add-ons (every visit or once a term).
@@ -36,6 +36,7 @@ A booking and business app for a home-services business (window cleaning, gutter
 - **Team and time**: roles, pay rates, commission rates, timesheets, and a commission payout tab with "Mark paid".
 
 **Everywhere**
+- On iPhone: ☰ menu top left (or swipe in from the left edge), iOS-style action sheets, Messages button with unread badge.
 - Address auto-complete.
 - Search (Ctrl/Cmd + K).
 - Undo after deleting.

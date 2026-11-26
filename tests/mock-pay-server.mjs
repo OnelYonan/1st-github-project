@@ -24,6 +24,7 @@ const INBOX = {
 const env = { STRIPE_SECRET_KEY: 'sk_test_mock', APP_TOKEN: 'test-token-123', ALLOWED_ORIGINS: 'http://localhost:8765',
   TWILIO_ACCOUNT_SID: 'ACmock', TWILIO_AUTH_TOKEN: 'twilio-secret', TWILIO_FROM: '+14165550100', INBOX };
 const smsLog = [];
+const relay = {}; // stand-in for ntfy.sh: topic -> messages
 const db = { customers: {}, pms: {}, sessions: {}, pis: {}, n: 0 };
 const log = [];
 const id = p => `${p}_${++db.n}`;
@@ -76,6 +77,25 @@ globalThis.fetch = async (url, opts = {}) => {
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost:8787');
+  if (url.pathname.startsWith('/relay/')) {
+    const [, , topic, kind] = url.pathname.split('/');
+    const head = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': '*' };
+    if (req.method === 'OPTIONS') { res.writeHead(204, head); res.end(); return; }
+    const list = relay[topic] ||= [];
+    if (req.method === 'POST') {
+      const chunks = []; for await (const c of req) chunks.push(c);
+      const body = Buffer.concat(chunks).toString();
+      if (body.length > 4096) { res.writeHead(413, head); res.end('{}'); return; }
+      const m = { id: 'r' + (list.length + 1).toString().padStart(4, '0'), time: Date.now() / 1000 | 0, event: 'message', topic, message: body };
+      list.push(m); res.writeHead(200, { ...head, 'Content-Type': 'application/json' }); res.end(JSON.stringify(m)); return;
+    }
+    if (kind === 'json') {
+      const since = url.searchParams.get('since') || '';
+      const i = list.findIndex(m => m.id === since);
+      const out = (i >= 0 ? list.slice(i + 1) : list).map(m => JSON.stringify(m)).join('\n');
+      res.writeHead(200, { ...head, 'Content-Type': 'application/x-ndjson' }); res.end(out ? out + '\n' : ''); return;
+    }
+  }
   if (url.pathname.startsWith('/__mock/')) {
     const q = Object.fromEntries(url.searchParams);
     let out = { ok: true };

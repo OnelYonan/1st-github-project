@@ -28,6 +28,19 @@ async function sendBack(a, back, { title, label, okText }) {
   }
   const link = `${a.r}#/signed/${await BH.pack(back)}`;
   const msg = `${label} ${a.n} from ${back.name}: ${link}`;
+  // No server: send it encrypted through the relay, so it still arrives in their app by itself.
+  if (a.x?.t && a.x.k && crypto?.subtle) {
+    box.innerHTML = '<div class="sign-done"><p>Sending…</p></div>';
+    try {
+      await BH.relaySend(a.x.u || 'https://ntfy.sh', a.x.t, a.id, await BH.seal(back, a.x.k));
+      box.innerHTML = `<div class="sign-done"><h2>✓ ${esc(title)}</h2><p>${okText}</p>
+        <div class="row"><button class="btn" type="button" onclick="window.print()">Print / save a copy</button>
+          ${a.b.phone ? `<a class="btn" href="sms:${encodeURIComponent(a.b.phone)}?&body=${encodeURIComponent(msg)}">Also text a copy</a>` : ''}</div>
+        <p class="muted small">${esc(label)} by ${esc(back.name)} on ${new Date(back.at).toLocaleString()}.</p>
+        ${back.sig?.length ? `<div class="sig-print">${BH.sigSVG(back.sig)}</div>` : ''}</div>`;
+      return;
+    } catch { /* relay unreachable: fall back to sending the link */ }
+  }
   box.innerHTML = `<div class="sign-done"><h2>✓ ${esc(title)}</h2>
     <p>Thank you, ${esc(back.name.split(' ')[0])}! <b>One last step:</b> send this to ${esc(a.b.name)}.</p>
     <div class="row">

@@ -30,6 +30,30 @@ async function unpack(str) {
   return JSON.parse(await new Response(stream).text());
 }
 
+/* ----- encrypted answers through a free public relay (ntfy.sh) -----
+ * The key travels only inside the link (after the #, never sent to any server) and stays on
+ * the business's device, so the relay only ever sees scrambled text. */
+const newKey = () => b64url(crypto.getRandomValues(new Uint8Array(32)));
+const aesKey = (k, use) => crypto.subtle.importKey('raw', fromB64url(k), 'AES-GCM', false, [use]);
+async function seal(obj, key) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await aesKey(key, 'encrypt'), new TextEncoder().encode(await pack(obj)));
+  return b64url(iv) + '.' + b64url(new Uint8Array(ct));
+}
+async function openSealed(str, key) {
+  const [iv, ct] = String(str).split('.');
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64url(iv) }, await aesKey(key, 'decrypt'), fromB64url(ct));
+  return unpack(new TextDecoder().decode(pt));
+}
+/** Post a sealed answer in pieces small enough to stay ordinary relay messages. */
+async function relaySend(base, topic, id, sealed) {
+  const size = 3000, n = Math.ceil(sealed.length / size), m = b64url(crypto.getRandomValues(new Uint8Array(6)));
+  for (let i = 0; i < n; i++) {
+    const res = await fetch(`${base.replace(/\/+$/, '')}/${encodeURIComponent(topic)}`, { method: 'POST', body: JSON.stringify({ v: 1, id, m, i, n, c: sealed.slice(i * size, (i + 1) * size) }) });
+    if (!res.ok) throw new Error('relay ' + res.status);
+  }
+}
+
 /** Short fingerprint of the agreement wording, so a signature is tied to exactly what was shown. */
 async function fingerprint(text) {
   const data = new TextEncoder().encode(text);
@@ -104,5 +128,5 @@ const DEFAULT_TERMS = `1. Services. {business} will provide the services listed 
 10. Card updates. Please let us know if your card is replaced or expires so your plan is not interrupted.
 11. Entire agreement. This agreement, including the services and add-ons listed above, is the entire agreement between you and {business}. If any part is found to be unenforceable, the rest remains in effect.`;
 
-window.BH = { pack, unpack, fingerprint, sigPath, sigSVG, SignaturePad, DEFAULT_TERMS, DEFAULT_TERMS_V1, SIG_W, SIG_H };
+window.BH = { pack, unpack, fingerprint, newKey, seal, openSealed, relaySend, sigPath, sigSVG, SignaturePad, DEFAULT_TERMS, DEFAULT_TERMS_V1, SIG_W, SIG_H };
 })();

@@ -632,8 +632,19 @@ function moreMenu(items, label = 'More') {
 }
 const menuItem = (label, act, data = '', ic = '', cls = '') => `<button type="button" class="menu-item ${cls}" role="menuitem" data-act="${act}" ${data}>${ic ? icon(ic) : ''}${label}</button>`;
 const menuLink = (label, href, ic = '') => `<a class="menu-item" role="menuitem" href="${href}">${ic ? icon(ic) : ''}${label}</a>`;
+function actionSheet(menu) {
+  const wrap = document.createElement('div');
+  wrap.className = 'sheet-backdrop';
+  wrap.innerHTML = `<div class="action-sheet" role="menu">${menu.innerHTML}</div>`;
+  document.body.append(wrap);
+  const close = () => { wrap.classList.add('closing'); setTimeout(() => wrap.remove(), 180); document.removeEventListener('keydown', esc); };
+  const esc = e => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', esc);
+  wrap.addEventListener('click', e => { if (e.target === wrap || e.target.closest('.menu-item')) close(); });
+}
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-menu]');
+  if (t && isPhone()) { e.preventDefault(); e.stopPropagation(); actionSheet(t.nextElementSibling); return; }
   $$('.menu-wrap.open').forEach(w => { if (!t || w !== t.parentElement) { w.classList.remove('open'); $('[data-menu]', w).setAttribute('aria-expanded', 'false'); } });
   if (t) { const w = t.parentElement; const open = w.classList.toggle('open'); t.setAttribute('aria-expanded', String(open)); e.stopPropagation(); }
 }, true);
@@ -1970,7 +1981,7 @@ async function planSignLink(p) {
       termMonths: +p.termMonths || 12, minVisits: +p.minVisits || 0, fee: +p.cancelFee ? money(p.cancelFee) : '',
       items: [...(p.items || []).map(i => [i.desc, String(+i.qty), money(i.price)]),
         ...(p.addons || []).map(a => [`Add-on: ${a.desc} (${a.when === 'once' ? 'once a term' : 'every visit'})`, '1', money(a.price)])] },
-    t: planTermsText(p), cs: safeUrl(s.cardSetupLink),
+    t: planTermsText(p), cs: safeUrl(s.cardSetupLink), x: relayFor(p),
   };
   return `${base}sign.html#${await BH.pack(payload)}`;
 }
@@ -1982,7 +1993,7 @@ async function sendPlan(p) {
   const msg = `Hi ${firstName(c.name)}, here is your ${p.name} agreement from ${db.settings.businessName || 'us'}. Please review and sign here: ${link}`;
   const mark = () => { p.status = 'sent'; p.sentAt = today(); save(); setTimeout(render, 300); };
   modal({ title: `Send ${p.number} for signature`, noFoot: true, body: `
-    <p class="muted small" style="margin-top:0">${esc(c.name)} opens the link, reads the agreement, signs with their finger and taps <b>Send</b>. ${serverHas('inbox') ? 'It comes straight back into this app and the plan starts.' : 'You’ll get a link back. Open it here to record the signature and start the plan.'}</p>
+    <p class="muted small" style="margin-top:0">${esc(c.name)} opens the link, reads the agreement, signs with their finger and taps <b>Send</b>. ${serverHas('inbox') || relayOn() ? 'It comes straight back into this app and the plan starts automatically.' : 'You’ll get a link back. Open it here to record the signature and start the plan.'}</p>
     <div class="stack info-list" style="gap:8px">
       ${c.phone ? `<a class="btn btn-primary js-send" href="${smsHref(c.phone, msg)}">${icon('sms')}Text to ${esc(c.phone)}</a>` : ''}
       ${c.email ? `<a class="btn ${c.phone ? '' : 'btn-primary'} js-send" href="${mailHref(c.email, `Your service agreement ${p.number}`, msg)}">${icon('mail')}Email to ${esc(c.email)}</a>` : ''}
@@ -2040,7 +2051,7 @@ async function quoteLink(q) {
     c: { name: c.name, first: firstName(c.name), address: q.serviceAddress || c.address || '' },
     q: { items: (q.items || []).map(i => [i.desc, i.details || '', +i.qty, +i.price, i.taxable !== false ? 1 : 0, i.optional ? 1 : 0, i.on ? 1 : 0]),
       disc: +q.discount || 0, rate: t.rate, taxName: s.taxName, cur: s.currency || 'CAD', loc: { CAD: 'en-CA', USD: 'en-US', GBP: 'en-GB', EUR: 'en-IE', AUD: 'en-AU', NZD: 'en-NZ' }[s.currency || 'CAD'], date: fmtDate(q.date), valid: q.validUntil ? fmtDate(q.validUntil) : '', dep: +q.depositPct || 0, notes: q.notes || '' },
-    t: q.terms || '' };
+    t: q.terms || '', x: relayFor(q) };
   return `${appBase()}sign.html#${await BH.pack(payload)}`;
 }
 /** The customer approved (or asked for changes to) a quote online. */
@@ -2582,13 +2593,57 @@ const stripeOn = () => !!(db.settings.stripeUrl && db.settings.stripeToken);
 /** What your server can do (from the last connection test): stripe, sms, inbox. */
 const serverHas = f => !!(stripeOn() && db.settings.stripeStatus?.features?.[f]);
 const serverBase = () => db.settings.stripeUrl.trim().replace(/\/+$/, '');
+/* Instant updates without any setup: customers' answers come back through ntfy.sh, encrypted
+ * with a key only their link and this device know. */
+const RELAY = 'https://ntfy.sh';
+const relayOn = () => db.settings.relay !== false;
+function relayFor(doc) {
+  if (!relayOn()) return undefined;
+  const s = db.settings;
+  if (!s.relayTopic) s.relayTopic = 'bh' + [...crypto.getRandomValues(new Uint8Array(14))].map(b => b.toString(16).padStart(2, '0')).join('');
+  if (!doc.relayKey) doc.relayKey = BH.newKey();
+  save();
+  return { u: s.relayUrl || RELAY, t: s.relayTopic, k: doc.relayKey };
+}
+/** Is anyone likely to answer? (Only then ask the relay, to keep requests low.) */
+const awaitingAnswers = () => db.quotes.some(q => q.relayKey && ['sent', 'draft', 'expired'].includes(q.status)) || db.subscriptions.some(p => p.relayKey && ['sent', 'draft'].includes(p.status));
+async function checkRelay(notes) {
+  const s = db.settings;
+  if (!relayOn() || !s.relayTopic || !awaitingAnswers()) return;
+  const res = await fetch(`${(s.relayUrl || RELAY).replace(/\/+$/, '')}/${s.relayTopic}/json?poll=1&since=${encodeURIComponent(s.relaySince || '12h')}`);
+  if (!res.ok) return;
+  const msgs = (await res.text()).split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(m => m?.event === 'message');
+  const pend = s.relayPending ||= {};
+  for (const m of msgs) {
+    s.relaySince = m.id;
+    let part; try { part = JSON.parse(m.message); } catch { continue; }
+    if (!part?.m || !part.id) continue;
+    const g = pend[part.m] ||= { id: part.id, n: part.n, c: {}, at: Date.now() };
+    g.c[part.i] = part.c;
+  }
+  for (const [mid, g] of Object.entries(pend)) {
+    if (Object.keys(g.c).length < g.n) { if (Date.now() - g.at > 864e5) delete pend[mid]; continue; }
+    delete pend[mid];
+    const doc = byId('quotes', g.id) || byId('subscriptions', g.id);
+    if (!doc?.relayKey) continue;
+    try {
+      const r = await BH.openSealed(Array.from({ length: g.n }, (_, i) => g.c[i]).join(''), doc.relayKey);
+      if (r.id !== doc.id) continue; // sealed for another document
+      const out = r.k === 'quote' ? await receiveQuote(r) : await receivePlanQuiet(r);
+      if (out.ok || !out.already) notes.push(out.msg);
+    } catch { /* not readable with this key: ignore */ }
+  }
+  save();
+}
 let inboxBusy = false;
 async function checkInbox(manual = false) {
-  if (!serverHas('inbox') || inboxBusy) { if (manual && !serverHas('inbox')) toast('Connect your server first: Settings → Plans & payments'); return 0; }
+  if (inboxBusy) return 0;
+  if (!serverHas('inbox') && !(relayOn() && db.settings.relayTopic)) { if (manual) toast('Nothing to check yet. Send a quote or agreement first.'); return 0; }
   inboxBusy = true;
   const notes = [];
   try {
-    const r = await payApi('/inbox');
+    try { await checkRelay(notes); } catch { /* relay unreachable: try again next time */ }
+    const r = serverHas('inbox') ? await payApi('/inbox') : { items: [] };
     const done = [];
     for (const it of r.items || []) {
       try {
@@ -2600,7 +2655,7 @@ async function checkInbox(manual = false) {
       } catch { /* one bad item shouldn't block the rest */ }
       done.push(it.key);
     }
-    if (done.length) await payApi('/inbox/ack', { keys: done });
+    if (done.length && serverHas('inbox')) await payApi('/inbox/ack', { keys: done });
     db.settings.lastInboxCheck = Date.now(); save();
     if (notes.length) { render(); toast(notes.length === 1 ? notes[0] : `${notes[0]} · and ${notes.length - 1} more`); }
     else if (manual) toast('Nothing new');
@@ -2608,7 +2663,8 @@ async function checkInbox(manual = false) {
   finally { inboxBusy = false; }
   return notes.length;
 }
-setInterval(() => { if (document.visibilityState === 'visible' && state.loaded) checkInbox(); }, 60000);
+setInterval(() => { if (document.visibilityState === 'visible' && state.loaded) checkInbox(); }, 30000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && state.loaded && !stripeOn()) checkInbox(); });
 const BRAND_NAMES = { visa: 'Visa', mastercard: 'Mastercard', amex: 'American Express', discover: 'Discover', interac: 'Interac Debit', jcb: 'JCB', diners: 'Diners Club', unionpay: 'UnionPay' };
 const appBase = () => location.href.split('#')[0].split('?')[0].replace(/index\.html$/, '');
 const doneUrl = kind => `${appBase()}paid.html?t=${kind}&b=${encodeURIComponent(db.settings.businessName || '')}`;
@@ -3201,7 +3257,7 @@ function docView(type, id) {
     : (['draft', 'sent', 'expired'].includes(status) ? a('Approve', 'quoteApprove', 'btn-primary', 'check') : '') +
       (status === 'approved' ? a('Schedule job', 'quoteToJob', 'btn-primary', 'calendar') + a('Convert to invoice', 'quoteToInvoice', '', 'invoice') : '') +
       (['approved', 'sent', 'draft'].includes(status) && depositAmt(d) && !depInv ? a(`Request ${money(depositAmt(d))} deposit`, 'quoteDeposit', '', 'invoice') : '') +
-      (status === 'sent' || status === 'expired' ? a('Follow up', 'docFollow', '', 'sms') : send) + a('Print / PDF', 'docPrint', '', 'print');
+      (status === 'sent' || status === 'expired' ? a('Follow up', 'docFollow', '', 'sms') : send) + a('Edit', 'editDoc', '', 'edit') + a('Print / PDF', 'docPrint', '', 'print');
   const pays = isInv ? (d.payments || []) : [];
   const canMarkSent = isInv ? !d.sent && status === 'draft' : d.status === 'draft';
   return head(`${isInv ? 'Invoice' : 'Quote'} ${esc(d.number)} ${badge(status)}`, '', `<a class="crumb" href="#/${coll}">← All ${coll}</a><span class="crumb"> · </span><a href="#/customers/${c.id}">${esc(c.name || '')}</a>`) + `
@@ -3224,6 +3280,7 @@ function docView(type, id) {
     ])}</div>
     ${!c.email && !c.phone ? `<div class="alert warn no-print" style="margin:0 auto 12px;max-width:820px">${icon('alert')}<span>This customer has no email or phone saved. <a href="#/customers/${c.id}">Add one</a> to send from here.</span></div>` : ''}
     ${isInv && d.checkout && !d.checkout.paid && !['paid', 'void'].includes(status) ? `<div class="alert info no-print" style="margin:0 auto 12px;max-width:820px">${icon('share')}<span>Pay-online link created ${fmtDate(iso(new Date(d.checkout.at)))}. <button class="link-btn" data-act="checkPaid" data-id="${id}">Check if paid</button></span></div>` : ''}
+    ${!isInv && ['sent', 'draft', 'expired'].includes(status) && d.sentAt && !d.changeRequest && (relayOn() || serverHas('inbox')) ? `<div class="alert info no-print js-waiting" style="margin:0 auto 12px;max-width:820px">${icon('clock')}<span>Waiting for ${esc(firstName(c.name))} to approve. This page updates by itself when they do. <button class="link-btn" data-act="checkInbox">Check now</button></span></div>` : ''}
     ${!isInv && d.changeRequest && ['sent', 'draft', 'expired'].includes(status) ? `<div class="alert warn no-print" style="margin:0 auto 12px;max-width:820px">${icon('sms')}<span><b>${esc(d.changeRequest.name || 'The customer')} asked for changes</b> (${fmtDate(d.changeRequest.at.slice(0, 10))}): “${esc(d.changeRequest.msg)}”. Edit the quote, then send it again.</span></div>` : ''}
     ${!isInv && d.signature && status === 'approved' ? `<div class="alert good no-print" style="margin:0 auto 12px;max-width:820px">${icon('check')}<span><b>Approved online</b> by ${esc(d.signature.name)} on ${esc(new Date(d.signature.at).toLocaleString())}${d.items.some(i => i.optional && i.on) ? ` · added ${d.items.filter(i => i.optional && i.on).map(i => esc(i.desc)).join(', ')}` : ''}. Next: schedule the job.</span></div>` : ''}
     ${depInv ? `<div class="alert info no-print" style="margin:0 auto 12px;max-width:820px">${icon('invoice')}<span>Deposit invoice <a href="#/invoices/${depInv.id}">${esc(depInv.number)}</a> · ${badge(invStatus(depInv))}</span></div>` : ''}
@@ -3415,7 +3472,7 @@ const textingNote = () => serverHas('sms')
 VIEWS.messages = id => {
   if (id) return threadView(id);
   const tab = filt('messages', 'tab', 'chats'), q = filt('messages', 'q', '').toLowerCase();
-  const actions = btn('New message', 'newMessage', 'btn-primary', '', 'plus') + btn('Promo blast', 'newBlast', '', '', 'share') + (serverHas('inbox') ? btn('Check for replies', 'checkInbox', '', '', 'repeat') : '');
+  const actions = btn('New message', 'newMessage', 'btn-primary', '', 'plus') + btn('Promo blast', 'newBlast', '', '', 'share') + (serverHas('inbox') || relayOn() ? btn('Check for updates', 'checkInbox', '', '', 'repeat') : '');
   const tabs = tabsHTML('messages', 'tab', [['chats', 'Conversations'], ['blasts', `Blasts (${db.blasts.length})`]], tab);
   if (tab === 'blasts') {
     return head('Messages', actions) + `<div class="card">${tabs}${db.blasts.length ? [...db.blasts].reverse().map(b => {
@@ -3663,6 +3720,9 @@ VIEWS.settings = () => {
     </div>
     <p class="muted small">Placeholders: <code>{business}</code> <code>{start}</code> <code>{term}</code> <code>{price}</code> <code>{minVisits}</code> <code>{fee}</code> <code>{renew}</code> <code>{customer}</code>.
       These are sensible starting terms, not legal advice. Have them reviewed for your province, since consumer protection rules can limit cancellation fees.</p></div>
+  <div class="card ${show('plans')}"><h2>Instant updates when customers sign</h2>
+    <p class="muted small">When a customer approves a quote or signs an agreement, it comes straight into this app (checked every 30 seconds while it’s open, and whenever you open it). Answers are encrypted on the customer’s phone with a key only you have, then passed through the free ntfy.sh relay, which can’t read them. Answers wait there for 12 hours, so open the app at least twice a day. Customers can also send you a copy by text.</p>
+    <label class="check"><input type="checkbox" name="relay" ${s.relay !== false ? 'checked' : ''}> Get customers’ approvals and signatures automatically</label></div>
   <div class="card ${show('messages')}"><h2>Texting from the app</h2>
     <p class="muted small">Without this, texts open your phone’s Messages app ready to send (that works fine). Turn it on to send texts and promo blasts from a business number right here, and see customers’ replies in Messages.</p>
     <div class="stripe-status">${serverHas('sms') ? `<span class="badge good">Texting on</span> Sending from <b>${esc(formatPhone(s.stripeStatus.features.smsFrom))}</b>` : stripeOn() ? '<span class="badge">Not set up</span> Your server is connected. Add Twilio to it (steps below).' : '<span class="badge">Not set up</span> Connect your server first (Settings → Plans & payments → Connect Stripe).'}</div>
@@ -3752,6 +3812,7 @@ document.addEventListener('submit', e => {
   delete d.categories;
   for (const k of ['taxRate', 'dueDays', 'mileageRate', 'nextInvoiceNo', 'nextQuoteNo', 'quoteValidDays', 'monthlyGoal', 'nextPlanNo', 'planTermMonths', 'planMinVisits', 'cancelFee']) if (k in d) d[k] = +d[k] || 0;
   for (const k of ['autoChargePlans', 'saveCardOnPay']) d[k] = !!d[k];
+  if ('stripeUrl' in d) d.relay = !!d.relay;
   if ('stripeUrl' in d) { d.stripeUrl = d.stripeUrl.trim(); d.stripeToken = d.stripeToken.trim(); if (d.stripeUrl !== db.settings.stripeUrl || d.stripeToken !== db.settings.stripeToken) d.stripeStatus = null; }
   if ('planTerms' in d && d.planTerms.trim() === BH.DEFAULT_TERMS.trim()) d.planTerms = '';
   const oldAddress = db.settings.address;
@@ -4455,6 +4516,14 @@ const ACTIONS = {
     scrim.onclick = () => { $('#sidebar').classList.remove('open'); scrim.remove(); };
     document.body.append(scrim);
   },
+  openDrawer: () => {
+    const sb = $('#sidebar');
+    if (sb.classList.contains('open')) { sb.classList.remove('open'); $('.scrim')?.remove(); return; }
+    sb.classList.add('open'); sb.scrollTop = 0;
+    const scrim = document.createElement('div'); scrim.className = 'scrim';
+    scrim.onclick = () => { sb.classList.remove('open'); scrim.remove(); };
+    document.body.append(scrim);
+  },
   openSearch: () => openSearch(),
   hideSetup: () => { db.settings.hideSetup = true; refresh(); },
   hideInstall: () => { db.settings.hideInstall = true; refresh(); },
@@ -4652,7 +4721,24 @@ document.addEventListener('change', async e => {
 document.addEventListener('click', e => { if (e.target.id === 'rmLogo') { db.settings.logo = ''; refresh(); } });
 
 // Mobile menu & search
-$('#menuBtn').addEventListener('click', () => ACTIONS.openMenu());
+$('#menuBtn').addEventListener('click', () => ACTIONS.openDrawer());
+// Swipe in from the left edge to open the menu, swipe it back to close.
+(() => {
+  let x0 = null, y0 = 0, mode = '';
+  document.addEventListener('touchstart', e => {
+    if (!isPhone() || $('#modalRoot').children.length || document.body.classList.contains('map-mode')) return;
+    const t = e.touches[0], open = $('#sidebar').classList.contains('open');
+    mode = open ? 'close' : t.clientX < 22 ? 'open' : '';
+    x0 = mode ? t.clientX : null; y0 = t.clientY;
+  }, { passive: true });
+  document.addEventListener('touchend', e => {
+    if (x0 === null) return;
+    const t = e.changedTouches[0], dx = t.clientX - x0, dy = Math.abs(t.clientY - y0); x0 = null;
+    if (dy > 60) return;
+    if (mode === 'open' && dx > 50) ACTIONS.openDrawer();
+    if (mode === 'close' && dx < -50) { $('#sidebar').classList.remove('open'); $('.scrim')?.remove(); }
+  }, { passive: true });
+})();
 $('#searchBtn').addEventListener('click', () => openSearch());
 
 // Team filter on the schedule
