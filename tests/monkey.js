@@ -33,10 +33,12 @@ const ROUTES = ['dashboard', 'schedule', 'jobs', 'messages', 'tasks', 'leads', '
         const loc = page.locator(`#main [data-act="${act}"]${id ? `[data-id="${id}"]` : ''}:visible`).first();
         if (!(await loc.count())) continue;
         total++;
-        try { await loc.click({ timeout: 2500 }); await page.waitForTimeout(220); } catch (e) { errs.push('click failed: ' + e.message.split('\n')[0]); }
+        try { if (label === 'phone') await loc.tap({ timeout: 2500 }); else await loc.click({ timeout: 2500 }); await page.waitForTimeout(220); } catch (e) { errs.push('tap failed: ' + e.message.split('\n')[0]); }
+        const opened = await page.evaluate(() => document.querySelectorAll('#modalRoot > .modal-backdrop:not(.closing)').length + document.querySelectorAll('.sheet-backdrop:not(.closing)').length);
+        if (opened > 1) errs.push(`one tap opened ${opened} windows (fired twice?)`);
         // inside any sheet that opened, tap its first harmless button too
         const inner = page.locator('#modalRoot .modal button.btn:not(.btn-danger):not([type=submit]):visible, .sheet-backdrop .menu-item:not(.danger):not(.menu-cancel)').first();
-        if (await inner.count()) { try { await inner.click({ timeout: 1500 }); await page.waitForTimeout(150); } catch { /* covered/closed: fine */ } }
+        if (await inner.count()) { try { if (label === 'phone') await inner.tap({ timeout: 1500 }); else await inner.click({ timeout: 1500 }); await page.waitForTimeout(150); } catch { /* covered/closed: fine */ } }
         await page.evaluate(() => { document.querySelectorAll('#modalRoot > *, .sheet-backdrop').forEach(m => m.remove()); });
         if (errs.length) problems.push(`${label} #/${r} → ${act}: ${errs.join(' | ')}`);
       }

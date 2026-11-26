@@ -1613,3 +1613,9 @@ input[type=file]::file-selector-button {
 .ptr.spin { opacity: 1 !important; transform: translate(-50%, 30px) !important; animation: ptrSpin .7s linear infinite; }
 @keyframes ptrSpin { to { transform: translate(-50%, 30px) rotate(360deg); } }
 @media (min-width: 761px) { .ptr { display: none; } }
+
+/* swipe actions on list rows */
+[data-swipe] { position: relative; touch-action: pan-y; }
+.swipe-tray { position: absolute; top: 0; bottom: 0; display: flex; }
+.swipe-act { flex: 1; border: none; color: #fff; font: inherit; font-weight: 600; font-size: .9rem; cursor: pointer; padding: 0 6px; }
+.show-sm:has([data-swipe]) { overflow-x: clip; margin: 0 -16px; padding: 0 16px; }

@@ -256,6 +256,16 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
     check(await pp.locator('body > .sheet-backdrop .action-sheet .menu-item:has-text("Delete")').isVisible(), 'iPhone: More opens an action sheet at the top of the page');
     await pp.tap('.action-sheet .menu-item:has-text("Delete")'); await pp.waitForTimeout(500);
     check(await pp.locator('.sheet-backdrop').count() === 0 && pp.url().endsWith('#/quotes'), 'iPhone: Delete in the sheet works and the sheet closes');
+    // swipe a quote row left → Edit / Delete
+    await pp.goto(URL + '#/quotes'); await pp.waitForTimeout(400);
+    const cdp = await ph.newCDPSession(pp);
+    const sr = pp.locator('.show-sm [data-swipe]').first(), sb0 = await sr.boundingBox(), rows0 = await pp.locator('.show-sm [data-swipe]').count();
+    const ty = sb0.y + sb0.height / 2, touch = (type, x) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y: ty }] });
+    await touch('touchStart', sb0.x + sb0.width - 20); for (let x = sb0.x + sb0.width - 30; x > sb0.x + sb0.width - 220; x -= 20) await touch('touchMove', x); await touch('touchEnd');
+    await pp.waitForTimeout(400);
+    check(await pp.locator('.swipe-act:has-text("Delete")').isVisible() && pp.url().endsWith('#/quotes'), 'iPhone: swiping a quote left shows Edit and Delete (and doesn’t open it)');
+    await pp.locator('.swipe-act:has-text("Delete")').first().tap(); await pp.waitForTimeout(500);
+    check(await pp.locator('.show-sm [data-swipe]').count() === rows0 - 1, 'iPhone: swipe Delete removes the quote');
     check(await pp.isVisible('#menuBtn'), 'iPhone: ☰ button top left');
     await pp.tap('#menuBtn'); await pp.waitForTimeout(450);
     const sb = await pp.evaluate(() => { const r = document.querySelector('#sidebar').getBoundingClientRect(); return [r.left, r.width, getComputedStyle(document.querySelector('#sidebar')).visibility]; });

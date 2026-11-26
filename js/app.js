@@ -644,6 +644,24 @@ function actionSheet(menu) {
   document.addEventListener('keydown', esc);
   wrap.addEventListener('click', e => { if (e.target === wrap || e.target.closest('.menu-item')) close(); });
 }
+/* Every action button reacts when the finger lifts: iPhone Safari sometimes skips the click
+ * after a scroll or swipe, which made buttons feel dead. Moves over 10px are scrolls and are
+ * ignored; the follow-up click (if any) is cancelled, so nothing runs twice. */
+(() => {
+  let el = null, x = 0, y = 0;
+  const SEL = '[data-act]:not(input):not(select):not(textarea), [data-tab], [data-tabset]';
+  document.addEventListener('touchstart', e => {
+    el = e.touches.length === 1 ? e.target.closest?.(SEL) : null;
+    if (el && (el.closest('[data-swipe]') && !el.matches('[data-act]') || el.disabled)) el = null;
+    if (el) { x = e.touches[0].clientX; y = e.touches[0].clientY; }
+  }, { passive: true });
+  document.addEventListener('touchmove', e => { if (el && Math.abs(e.touches[0].clientX - x) + Math.abs(e.touches[0].clientY - y) > 10) el = null; }, { passive: true });
+  document.addEventListener('touchend', e => {
+    const t = el; el = null;
+    if (!t || !isPhone() || e.target.closest?.(SEL) !== t || t.closest('[data-menu], #pageMore, .swipe-act')) return;
+    e.preventDefault(); t.click();
+  }, { passive: false });
+})();
 /** The page's "More" menu (in the page header or document toolbar). */
 const pageMenu = () => { const b = $$('#main .page-head [data-menu], #main .doc-actions [data-menu]').pop(); return b?.nextElementSibling || null; };
 /* iPhone Safari sometimes drops the "click" after a tap. Open menus when the finger lifts,
@@ -930,6 +948,57 @@ function render() {
   document.title = [id ? '' : pageLabel, db.settings.businessName || 'Business Hub'].filter(Boolean).join(' · ');
 }
 const isPhone = () => matchMedia('(max-width: 760px)').matches;
+/** Swipe-left actions on a list row (phones), like iOS Mail. acts: [[action, label, colour, extra data]] */
+const swipeAttr = (id, acts) => `data-swipe="${esc(JSON.stringify(acts))}" data-sid="${id}"`;
+(() => {
+  const W = 78;
+  let row = null, open = null, x0 = 0, y0 = 0, base = 0, tx = 0, dragging = false, decided = false;
+  const tray = r => r.querySelector(':scope > .swipe-tray') || (() => {
+    const acts = JSON.parse(r.dataset.swipe), t = document.createElement('span');
+    t.className = 'swipe-tray'; t.style.width = acts.length * W + 'px'; t.style.right = -acts.length * W + 'px';
+    t.innerHTML = acts.map(([a, l, c, x], i) => `<button type="button" class="swipe-act" data-i="${i}" style="background:${c}">${esc(l)}</button>`).join('');
+    r.append(t); return t;
+  })();
+  const width = r => JSON.parse(r.dataset.swipe).length * W;
+  const settle = (r, to) => { r.style.transition = 'transform .25s cubic-bezier(.2,.9,.25,1)'; r.style.transform = to ? `translateX(${to}px)` : ''; if (!to) { if (open === r) open = null; } else open = r; };
+  document.addEventListener('touchstart', e => {
+    const r = e.target.closest?.('[data-swipe]');
+    if (open && open !== r && !e.target.closest('.swipe-tray')) settle(open, 0);
+    if (!r || !isPhone() || e.target.closest('.swipe-tray')) { row = null; return; }
+    row = r; x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; base = open === r ? -width(r) : 0; dragging = false; decided = false;
+  }, { passive: true });
+  document.addEventListener('touchmove', e => {
+    if (!row) return;
+    const dx = e.touches[0].clientX - x0, dy = e.touches[0].clientY - y0;
+    if (!decided && Math.abs(dx) + Math.abs(dy) > 10) { decided = true; dragging = Math.abs(dx) > Math.abs(dy) * 1.2; if (dragging) tray(row); }
+    if (!dragging) return;
+    tx = Math.min(0, Math.max(-width(row) - 40, base + dx));
+    row.style.transition = 'none'; row.style.transform = `translateX(${tx}px)`;
+  }, { passive: true });
+  document.addEventListener('touchend', () => {
+    if (!row || !dragging) { row = null; return; }
+    row.dataset.swiped = '1'; setTimeout(() => { if (row) delete row.dataset.swiped; }, 400);
+    settle(row, tx < -width(row) / 2 ? -width(row) : 0);
+  });
+  const fire = (b, r, e) => {
+    e.preventDefault(); e.stopPropagation();
+    const [a, , , x] = JSON.parse(r.dataset.swipe)[+b.dataset.i];
+    settle(r, 0); ACTIONS[a]?.({ id: r.dataset.sid, ...(x || {}) }, b, e);
+  };
+  // Buttons in the tray act when the finger lifts (a click doesn't always follow a swipe on iPhone).
+  let bx = 0, by = 0;
+  document.addEventListener('touchstart', e => { if (e.target.closest?.('.swipe-act')) { bx = e.touches[0].clientX; by = e.touches[0].clientY; } }, { passive: true });
+  document.addEventListener('touchend', e => {
+    const b = e.target.closest?.('.swipe-act'), r = b?.closest('[data-swipe]'), t = e.changedTouches[0];
+    if (b && r && Math.abs(t.clientX - bx) + Math.abs(t.clientY - by) < 12) fire(b, r, e);
+  }, { passive: false });
+  document.addEventListener('click', e => {
+    const b = e.target.closest('.swipe-act');
+    const r = e.target.closest('[data-swipe]');
+    if (b && r) { fire(b, r, e); return; }
+    if (r && (r.dataset.swiped || open === r)) { e.preventDefault(); e.stopPropagation(); if (!r.dataset.swiped) settle(r, 0); }
+  }, true);
+})();
 const FAB_ACT = { messages: 'newMessage', dashboard: 'newJob', schedule: 'newJob', jobs: 'newJob', customers: 'newCustomer', quotes: 'newQuote',
   invoices: 'newInvoice', expenses: 'newExpense', income: 'newIncome', services: 'newService', leads: 'newLead', tasks: 'newTask', plans: 'newPlan', team: 'newMember' };
 const fab = name => FAB_ACT[name] ? `<button class="fab no-print" data-act="${FAB_ACT[name]}" aria-label="Add">${icon('plus')}</button>` : '';
@@ -1125,7 +1194,7 @@ const quickTaskForm = (custId = '') => `<form class="quick-task" data-customer="
 
 function jobListItem(j) {
   const d = j.date ? parseD(j.date) : null;
-  return `<a class="list-item" href="#/jobs/${j.id}" style="color:inherit">
+  return `<a class="list-item" href="#/jobs/${j.id}" style="color:inherit" ${['scheduled', 'in_progress'].includes(j.status) ? swipeAttr(j.id, [['editJob', 'Edit', '#8e8e93'], ['jobStatus', 'Done', '#34c759', { s: 'completed' }]]) : ''}>
     <div class="date-chip">${d ? `<span>${d.toLocaleDateString(undefined, { month: 'short' })}</span><b>${d.getDate()}</b>` : '<span>No</span><b style="font-size:.7rem">date</b>'}</div>
     <div class="grow"><div class="title">${esc(j.title)}</div>
     <div class="muted small">${esc(custName(j.customerId))}${j.start ? ' · ' + fmtTime(j.start) : ''}${j.assignedTo ? ' · ' + esc(j.assignedTo) : ''}</div></div>
@@ -3304,7 +3373,8 @@ VIEWS.quotes = id => {
 };
 function docTable(all, route, statusFn, extraFn) {
   const isInv = route === 'invoices', pg = paged(all, route), list = pg.rows;
-  return `<div class="show-sm">${list.map(x => `<a class="list-item" style="color:inherit" href="#/${route}/${x.id}"><div class="grow">
+  const type = isInv ? 'invoice' : 'quote';
+  return `<div class="show-sm">${list.map(x => `<a class="list-item" style="color:inherit" href="#/${route}/${x.id}" ${swipeAttr(x.id, [['editDoc', 'Edit', '#8e8e93', { type }], ['deleteDoc', 'Delete', '#ff3b30', { type }]])}><div class="grow">
       <div class="title">${esc(custName(x.customerId))}</div><div class="muted small">${esc(x.number)} · ${extraFn(x) || fmtDate(x.date)}</div></div>
       <div class="right"><div class="num">${money(isInv && balance(x) > 0 ? balance(x) : totals(x).total)}</div>${badge(statusFn(x))}</div></a>`).join('')}</div>
     <div class="table-wrap hide-sm"><table><thead><tr><th>Number</th><th>Customer</th><th class="hide-sm">Date</th><th>Status</th><th class="num">Total</th>${route === 'invoices' ? '<th class="num">Balance</th>' : ''}</tr></thead><tbody>
