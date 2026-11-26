@@ -1586,3 +1586,21 @@ input[type=file]::file-selector-button {
   #mobileClock .clock-btn:not(.on) { width: 36px; padding: 0; justify-content: center; }
   .page-head .actions, .doc-actions { padding-right: 16px; }
 }
+
+/* ============ v14: booking form ============ */
+.req-head { display: flex; gap: 14px; align-items: center; margin-bottom: 18px; }
+.req-head img { border-radius: 12px; }
+.req-card h2 { font-size: 1.05rem; margin-bottom: 8px; }
+.req-send { min-height: 50px; font-size: 1.05rem; }
+.req-done { text-align: center; padding: 36px 24px; }
+.req-check { width: 64px; height: 64px; border-radius: 50%; background: var(--green); color: #fff; font-size: 2rem; display: grid; place-items: center; margin: 0 auto 12px; }
+.qr-box { margin-top: 16px; text-align: center; }
+.qr-box svg { width: 220px; height: 220px; background: #fff; border-radius: 12px; padding: 6px; }
+
+/* ============ v14: job done sheet, reminders ============ */
+.done-hero { text-align: center; margin: 4px 0 18px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.done-hero .req-check { width: 56px; height: 56px; font-size: 1.7rem; margin-bottom: 6px; animation: popIn .4s cubic-bezier(.2, 1.4, .4, 1); }
+@keyframes popIn { from { transform: scale(.4); opacity: 0; } to { transform: none; opacity: 1; } }
+.btn-lg { min-height: 50px; font-size: 1rem; width: 100%; justify-content: center; }
+.js-rem.done { opacity: .6; }
+.badge.bad { background: var(--bad-soft); color: var(--bad); }

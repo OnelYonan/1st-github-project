@@ -974,6 +974,7 @@ VIEWS.dashboard = () => {
   const upcoming = db.jobs.filter(j => ['scheduled', 'in_progress'].includes(j.status) && inRange(j.date, t, addDays(t, 7)))
     .sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || '')));
   const todayCount = upcoming.filter(j => j.date === t).length;
+  const remindTomorrow = reminderJobs();
   const toSchedule = db.quotes.filter(q => q.status === 'approved' && q.signature && !q.jobId && !db.jobs.some(j => j.quoteId === q.id));
   const changeReqs = db.quotes.filter(q => q.changeRequest && ['sent', 'draft'].includes(q.status));
   const unreadMsgs = db.messages.filter(m => m.dir === 'in' && !m.read).length;
@@ -1031,6 +1032,7 @@ VIEWS.dashboard = () => {
     changeReqs.length && ['warn', 'quote', `${plural(changeReqs.length, 'quote')} with changes requested`, 'The customer asked you to update the quote', `#/quotes/${changeReqs[0].id}`],
     unreadMsgs && ['info', 'sms', `${plural(unreadMsgs, 'unread text')}`, 'Customers replied to you', '#/messages'],
     staleQuotes.length && ['info', 'quote', `${plural(staleQuotes.length, 'quote')} to follow up`, 'Sent 3+ days ago with no answer', '#/quotes'],
+    remindTomorrow.length && ['info', 'sms', `Remind ${plural(remindTomorrow.length, 'customer')} about tomorrow`, 'Send appointment reminders in one go', '', '', 'sendReminders'],
     lateJobs.length && ['warn', 'calendar', `${plural(lateJobs.length, 'past job')} still open`, 'Mark them complete or reschedule', '#/jobs', 'jobs:tab:late'],
     awaitingSig.length && ['info', 'repeat', `${plural(awaitingSig.length, 'plan')} waiting for signature`, 'Sent 3+ days ago. Send a reminder.', '#/plans'],
     expiringCards.length && ['warn', 'expense', `${plural(expiringCards.length, 'card')} expiring`, 'Customers on a plan need a new card', `#/customers/${expiringCards[0]}`],
@@ -1338,7 +1340,7 @@ VIEWS.leads = () => {
   const since = addDays(today(), -90);
   const recentWon = db.leads.filter(l => l.stage === 'won' && (l.closedAt || l.createdAt) >= since).length;
   const recentLost = db.leads.filter(l => l.stage === 'lost' && (l.closedAt || l.createdAt) >= since).length;
-  return head('Leads', btn('New lead', 'newLead', 'btn-primary', '', 'plus'), 'Track every enquiry from first call to booked job.') + `
+  return head('Leads', btn('New lead', 'newLead', 'btn-primary', '', 'plus') + btn('Booking form', 'bookingShare', '', '', 'share'), 'Track every enquiry from first call to booked job. Share your booking form and online requests land here.') + `
   <div class="grid grid-3">
     <div class="card stat"><div class="label">Open leads</div><div class="value">${openLeads.length}</div><div class="sub">${db.leads.filter(l => l.stage === firstStage()).length} in ${esc(openStages()[0].label)}</div></div>
     <div class="card stat"><div class="label">Pipeline value</div><div class="value">${money(sum(openLeads, l => l.value))}</div><div class="sub">Estimated</div></div>
@@ -2115,6 +2117,60 @@ function activatePlan(p, quiet = false) {
   go('#/plans/' + p.id);
   toast(`${p.number} signed and active · visits scheduled`);
 }
+/** After finishing a job: the next steps, one tap each (like Jobber). */
+function jobDoneSheet(j) {
+  const c = cust(j.customerId) || {}, s = db.settings;
+  const canInvoice = !j.invoiceId && !j.noInvoice && !(j.planId && s.autoChargePlans && stripeOn());
+  const review = c.phone && !j.reviewAskedAt;
+  const next = db.jobs.filter(x => x.status === 'scheduled' && x.date === today() && x.id !== j.id).sort((a, b) => (a.start || '').localeCompare(b.start || ''))[0];
+  if (!canInvoice && !review && !next) { toast('Job complete ✓'); return; }
+  modal({ title: 'Job complete ✓', noFoot: true, focus: false, cls: 'done-sheet', body: `
+    <div class="done-hero"><div class="req-check">✓</div><b>${esc(j.title)}</b><div class="muted small">${esc(c.name || '')}${j.price || (j.items || []).length ? ' · ' + money(totals(j).total) : ''}</div></div>
+    <div class="stack" style="gap:10px">
+      ${canInvoice ? `<button type="button" class="btn btn-primary btn-lg js-inv">${icon('invoice')}Create invoice</button>` : ''}
+      ${review ? `<button type="button" class="btn btn-lg js-review">${icon('star')}Ask ${esc(firstName(c.name))} for a review</button>` : ''}
+      ${next ? `<a class="btn btn-lg" href="#/jobs/${next.id}">${icon('truck')}Next job: ${esc(next.title)}${next.start ? ' · ' + fmtTime(next.start) : ''}</a>` : ''}
+      <button type="button" class="btn btn-lg" data-close>Done</button>
+    </div>`,
+    onMount: (f, close) => {
+      $('.js-inv', f)?.addEventListener('click', () => { close(); ACTIONS.jobToInvoice({ id: j.id }); });
+      $('.js-review', f)?.addEventListener('click', () => {
+        j.reviewAskedAt = today(); save(); close();
+        openSms(c.phone, fillTemplate('tplReview', { ...custVars(c) }));
+        if (!s.reviewLink) setTimeout(() => toast('Tip: add your Google review link in Settings → Tax & money so it goes in the text.'), 1200);
+      });
+    } });
+}
+/* ----- visit reminders for tomorrow (like Homebase’s automatic reminders) ----- */
+const reminderJobs = () => db.jobs.filter(j => j.status === 'scheduled' && j.date === addDays(today(), 1) && !j.remindedAt && cust(j.customerId)?.phone);
+const reminderText = j => { const c = cust(j.customerId); return fillTemplate('tplAppt', { ...custVars(c), date: fmtDateShort(j.date), time: j.start ? ' at ' + fmtTime(j.start) : '' }); };
+function remindersSheet() {
+  const list = reminderJobs();
+  if (!list.length) { toast('Everyone booked for tomorrow already has a reminder'); return; }
+  const sms = serverHas('sms');
+  modal({ title: `Remind tomorrow’s ${list.length === 1 ? 'customer' : list.length + ' customers'}`, noFoot: true, focus: false, body: `
+    <p class="muted small" style="margin-top:0">${sms ? 'Texts go from your business number.' : 'Tap each one: Messages opens with the reminder ready, tap send, then come back.'} Wording: Settings → Messages → Appointment confirmation.</p>
+    ${sms ? `<button type="button" class="btn btn-primary js-all" style="width:100%;margin-bottom:10px">${icon('send')}Send all ${list.length}</button>` : ''}
+    ${list.map(j => { const c = cust(j.customerId); return `<a class="list-item js-rem ${sms ? '' : 'js-raw-sms'}" data-id="${j.id}" href="${sms ? '#' : smsHref(c.phone, reminderText(j))}" style="color:inherit">
+      <span class="avatar sm" style="background:${memberColor(j.assignedTo) || '#34c759'}">${esc(c.name[0])}</span>
+      <div class="grow"><div class="title">${esc(c.name)}</div><div class="muted small">${esc(j.title)}${j.start ? ' · ' + fmtTime(j.start) : ''}</div></div><span class="badge js-st">${sms ? 'Ready' : 'Text'}</span></a>`; }).join('')}`,
+    onMount: (f, close) => {
+      const mark = (a, ok = true) => { const st = $('.js-st', a); st.textContent = ok ? 'Sent ✓' : 'Failed'; st.className = `badge ${ok ? 'good' : 'bad'} js-st`; a.classList.add('done'); };
+      if (!sms) $$('.js-rem', f).forEach(a => a.addEventListener('click', () => {
+        const j = byId('jobs', a.dataset.id), c = cust(j.customerId);
+        if (!j.remindedAt) { j.remindedAt = today(); logMsg({ customerId: c.id, phone: c.phone, dir: 'out', body: reminderText(j), via: 'phone', status: 'opened' }); save(); }
+        mark(a);
+      }));
+      $('.js-all', f)?.addEventListener('click', async e => {
+        e.target.disabled = true; let ok = 0;
+        for (const a of $$('.js-rem', f)) {
+          const j = byId('jobs', a.dataset.id), r = await sendText(cust(j.customerId), reminderText(j));
+          if (r.ok) { j.remindedAt = today(); ok++; } mark(a, r.ok);
+        }
+        save(); toast(`${ok} reminder${ok === 1 ? '' : 's'} sent`); setTimeout(() => { close(); render(); }, 700);
+      });
+    } });
+}
 function addPlanVisits(p, from, to) {
   const dates = planVisitDates(p, from, to), perVisit = p.billing === 'per_visit';
   dates.forEach((date, i) => {
@@ -2628,7 +2684,7 @@ function relayFor(doc) {
 const awaitingAnswers = () => db.quotes.some(q => q.relayKey && ['sent', 'draft', 'expired'].includes(q.status)) || db.subscriptions.some(p => p.relayKey && ['sent', 'draft'].includes(p.status));
 async function checkRelay(notes) {
   const s = db.settings;
-  if (!relayOn() || !s.relayTopic || !awaitingAnswers()) return;
+  if (!relayOn() || !s.relayTopic || !(awaitingAnswers() || s.bookingKeys)) return;
   const res = await fetch(`${(s.relayUrl || RELAY).replace(/\/+$/, '')}/${s.relayTopic}/json?poll=1&since=${encodeURIComponent(s.relaySince || '12h')}`);
   if (!res.ok) return;
   const msgs = (await res.text()).split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(m => m?.event === 'message');
@@ -2643,6 +2699,10 @@ async function checkRelay(notes) {
   for (const [mid, g] of Object.entries(pend)) {
     if (Object.keys(g.c).length < g.n) { if (Date.now() - g.at > 864e5) delete pend[mid]; continue; }
     delete pend[mid];
+    if (g.id === 'request') { // booking form
+      try { const lead = addBookingRequest(await BH.openFor(Array.from({ length: g.n }, (_, i) => g.c[i]).join(''), s.bookingKeys.priv)); if (lead) notes.push(`New booking request from ${lead.name}`); } catch { /* not for us */ }
+      continue;
+    }
     const doc = byId('quotes', g.id) || byId('subscriptions', g.id);
     if (!doc?.relayKey) continue;
     try {
@@ -2654,6 +2714,56 @@ async function checkRelay(notes) {
   }
   save();
 }
+/** A new customer filled in the online booking form: it becomes a lead. */
+function addBookingRequest(r) {
+  if (!r?.name || (!r.phone && !r.email)) return null;
+  const d10 = digits10(r.phone);
+  if (db.leads.some(l => l.reqAt === r.at)) return null; // already have it
+  const when = [r.days?.length ? 'Days: ' + r.days.join(', ') : '', r.time ? 'Time: ' + r.time : '', r.date ? 'Preferred date: ' + fmtDate(r.date) : ''].filter(Boolean).join(' · ');
+  const lead = { id: uid(), createdAt: today(), stage: firstStage(), followUp: today(), name: String(r.name).slice(0, 120), phone: String(r.phone || '').slice(0, 40),
+    email: String(r.email || '').slice(0, 120), address: String(r.address || '').slice(0, 200), service: (r.services || []).join(', ').slice(0, 200),
+    source: LEAD_SOURCES.includes(r.source) && r.source ? r.source : 'Website', notes: ['Booked online.', when, r.notes ? String(r.notes).slice(0, 2000) : ''].filter(Boolean).join('\n'),
+    reqAt: r.at, fromForm: true };
+  const existing = d10 && db.customers.find(c => digits10(c.phone) === d10);
+  if (existing) { lead.customerId = existing.id; (existing.log ||= []).push({ id: uid(), date: today(), text: `Booking request online: ${lead.service || 'new work'}` }); }
+  db.leads.push(lead); save();
+  return lead;
+}
+async function bookingLink() {
+  const s = db.settings;
+  if (!s.relayTopic) relayFor({}); // makes the topic
+  if (!s.bookingKeys) { s.bookingKeys = await BH.newKeyPair(); save(); }
+  const payload = { b: { name: s.businessName || 'Our team', phone: s.phone, email: s.email, area: s.address ? s.address.split(',').slice(-2).join(',').trim() : '' },
+    svc: db.services.filter(x => !x.addon).map(x => x.name).slice(0, 16), u: s.relayUrl || RELAY, t: s.relayTopic, pk: s.bookingKeys.pub, src: LEAD_SOURCES.filter(Boolean) };
+  return `${appBase()}request.html#${await BH.pack(payload)}`;
+}
+async function bookingShare() {
+  const link = await bookingLink(), s = db.settings;
+  const msg = `Book with ${s.businessName || 'us'} online: ${link}`;
+  modal({ title: 'Online booking form', noFoot: true, focus: false, body: `
+    <p class="muted small" style="margin-top:0">Share this link on Instagram, Facebook, Google, your website or door hangers. New customers pick what they need and send their details. Requests show up in <b>Leads</b> by themselves, readable only on this device.</p>
+    <div class="stack" style="gap:8px">
+      <button type="button" class="btn btn-primary js-share">${icon('share')}Share link</button>
+      <button type="button" class="btn js-copy">Copy link</button>
+      <a class="btn" href="${esc(link)}" target="_blank" rel="noopener">Preview the form ↗</a>
+    </div>
+    <div class="qr-box js-qr"><span class="muted small">Making a QR code for flyers…</span></div>`,
+    onMount: f => {
+      $('.js-copy', f).addEventListener('click', async () => { try { await navigator.clipboard.writeText(link); toast('Booking link copied'); } catch { prompt('Copy this link:', link); } });
+      $('.js-share', f).addEventListener('click', async () => {
+        if (navigator.share) { try { await navigator.share({ title: `Book with ${s.businessName || 'us'}`, text: msg, url: link }); } catch { /* cancelled */ } }
+        else { try { await navigator.clipboard.writeText(msg); toast('Copied. Paste it anywhere.'); } catch { prompt('Copy this:', msg); } }
+      });
+      loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js').then(() => {
+        const qr = window.qrcode(0, 'L'); qr.addData(link); qr.make();
+        $('.js-qr', f).innerHTML = qr.createSvgTag({ cellSize: 3, margin: 2, scalable: true }) + '<div class="muted small">Screenshot or print this for door hangers and flyers.</div>';
+      }).catch(() => { $('.js-qr', f).innerHTML = ''; });
+    } });
+}
+const loadScript = src => new Promise((res, rej) => {
+  if ([...document.scripts].some(x => x.src === src)) return res();
+  const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = rej; document.head.append(el);
+});
 let inboxBusy = false;
 async function checkInbox(manual = false) {
   if (inboxBusy) return 0;
@@ -3739,6 +3849,9 @@ VIEWS.settings = () => {
     </div>
     <p class="muted small">Placeholders: <code>{business}</code> <code>{start}</code> <code>{term}</code> <code>{price}</code> <code>{minVisits}</code> <code>{fee}</code> <code>{renew}</code> <code>{customer}</code>.
       These are sensible starting terms, not legal advice. Have them reviewed for your province, since consumer protection rules can limit cancellation fees.</p></div>
+  <div class="card ${show('business')}"><h2>Online booking form</h2>
+    <p class="muted small">A link new customers can use to request work: they pick services from your price book, add their address and best times, and it lands in Leads. Put it in your Instagram bio, Google profile, website or on door hangers (there’s a QR code).</p>
+    <div class="row">${btn('Share booking form', 'bookingShare', 'btn-sm btn-primary', '', 'share')}</div></div>
   <div class="card ${show('plans')}"><h2>Instant updates when customers sign</h2>
     <p class="muted small">When a customer approves a quote or signs an agreement, it comes straight into this app (checked every 30 seconds while it’s open, and whenever you open it). Answers are encrypted on the customer’s phone with a key only you have, then passed through the free ntfy.sh relay, which can’t read them. Answers wait there for 12 hours, so open the app at least twice a day. Customers can also send you a copy by text.</p>
     <label class="check"><input type="checkbox" name="relay" ${s.relay !== false ? 'checked' : ''}> Get customers’ approvals and signatures automatically</label></div>
@@ -4485,8 +4598,8 @@ const ACTIONS = {
     if (ds.s === 'completed') { j.completedAt = today(); if (j.startedAt && !j.finishedAt) j.finishedAt = localStamp(); }
     if (ds.s === 'scheduled') { j.completedAt = ''; }
     refresh();
-    if (ds.s === 'completed' && !j.invoiceId) toast('Job complete. Create the invoice while it’s fresh!'); else toast('Status updated');
     if (ds.s === 'completed' && j.planId) autoChargeVisit(j);
+    if (ds.s === 'completed') jobDoneSheet(j); else toast('Status updated');
   },
   toggleNoInvoice: ds => { const j = byId('jobs', ds.id); j.noInvoice = !j.noInvoice; refresh(); },
   deleteJob: ds => {
@@ -4547,6 +4660,8 @@ const ACTIONS = {
   hideSetup: () => { db.settings.hideSetup = true; refresh(); },
   hideInstall: () => { db.settings.hideInstall = true; refresh(); },
   quickSetup: () => quickSetupForm(),
+  bookingShare: () => bookingShare(),
+  sendReminders: () => remindersSheet(),
   connectStripe: () => connectStripeWizard(),
   newMessage: ds => newMessageForm({ customerId: ds.cust }),
   newBlast: () => blastForm(),

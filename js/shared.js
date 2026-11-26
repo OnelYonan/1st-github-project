@@ -45,6 +45,26 @@ async function openSealed(str, key) {
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromB64url(iv) }, await aesKey(key, 'decrypt'), fromB64url(ct));
   return unpack(new TextDecoder().decode(pt));
 }
+/* Public booking form: anyone may send a request, only the business can read it.
+ * A fresh AES key per request, locked with the business's RSA public key. */
+async function sealFor(obj, pub) {
+  const aes = newKey();
+  const k = await crypto.subtle.importKey('jwk', { kty: 'RSA', n: pub.n, e: pub.e, alg: 'RSA-OAEP-256', ext: true }, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt']);
+  const wrapped = new Uint8Array(await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, k, fromB64url(aes)));
+  return b64url(wrapped) + '~' + await seal(obj, aes);
+}
+async function openFor(str, privJwk) {
+  const [w, rest] = String(str).split('~');
+  const k = await crypto.subtle.importKey('jwk', privJwk, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']);
+  const aes = b64url(new Uint8Array(await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, k, fromB64url(w))));
+  return openSealed(rest, aes);
+}
+async function newKeyPair() {
+  const kp = await crypto.subtle.generateKey({ name: 'RSA-OAEP', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['encrypt', 'decrypt']);
+  const pub = await crypto.subtle.exportKey('jwk', kp.publicKey), priv = await crypto.subtle.exportKey('jwk', kp.privateKey);
+  return { pub: { n: pub.n, e: pub.e }, priv };
+}
+
 /** Post a sealed answer in pieces small enough to stay ordinary relay messages. */
 async function relaySend(base, topic, id, sealed) {
   const size = 3000, n = Math.ceil(sealed.length / size), m = b64url(crypto.getRandomValues(new Uint8Array(6)));
@@ -128,5 +148,5 @@ const DEFAULT_TERMS = `1. Services. {business} will provide the services listed 
 10. Card updates. Please let us know if your card is replaced or expires so your plan is not interrupted.
 11. Entire agreement. This agreement, including the services and add-ons listed above, is the entire agreement between you and {business}. If any part is found to be unenforceable, the rest remains in effect.`;
 
-window.BH = { pack, unpack, fingerprint, newKey, seal, openSealed, relaySend, sigPath, sigSVG, SignaturePad, DEFAULT_TERMS, DEFAULT_TERMS_V1, SIG_W, SIG_H };
+window.BH = { pack, unpack, fingerprint, newKey, seal, openSealed, relaySend, sealFor, openFor, newKeyPair, sigPath, sigSVG, SignaturePad, DEFAULT_TERMS, DEFAULT_TERMS_V1, SIG_W, SIG_H };
 })();

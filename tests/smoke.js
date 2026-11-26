@@ -103,7 +103,9 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   await modalSubmit(); await page.waitForSelector('text=Job costing');
   check(await page.evaluate(() => document.querySelectorAll('.page-head').length) === 1, 'job page opened');
   await page.click('.page-head button:has-text("Complete")');
-  await page.click('.page-head button:has-text("Create invoice")'); await page.waitForSelector('.doc');
+  await page.waitForSelector('.done-sheet .js-inv');
+  check(await page.isVisible('.done-sheet .js-review'), 'job complete sheet offers invoice and review request');
+  await page.click('.done-sheet .js-inv'); await page.waitForSelector('.doc');
   check(page.url().includes('#/invoices/'), 'job converted to invoice');
 
   // Expense with tax calc + recurring

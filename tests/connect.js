@@ -158,6 +158,20 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
   check(await dbGet(`d.customers.find(x => x.name === 'David Chen').noPromo === true`), 'unsubscribed number is marked “no promotions”');
   await shot(page, 'blasts');
 
+  /* ---------- reminders for tomorrow ---------- */
+  await idb(`const t = new Date(); t.setDate(t.getDate() + 1); const ds = t.toISOString().slice(0, 10);
+    const local = new Date(t.getTime() - t.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+    d.jobs.forEach(j => { if (j.date === local) j.date = '2027-06-01'; });
+    const m = d.customers.find(x => x.name === 'Maria Rossi'), k = d.customers.find(x => x.name === 'Kevin O’Brien') || d.customers[3];
+    d.jobs.push({ id: 'rem1', customerId: m.id, title: 'Window cleaning', date: local, start: '09:30', status: 'scheduled', items: [] }, { id: 'rem2', customerId: k.id, title: 'Gutters', date: local, start: '13:00', status: 'scheduled', items: [] }); void ds;`);
+  await go('#/dashboard');
+  const remRow = page.locator('.attn [data-act="sendReminders"]:visible').first();
+  check(await remRow.count() === 1 && (await remRow.textContent()).includes('Remind 2 customers'), 'dashboard offers to remind tomorrow’s customers');
+  const smsBefore = (await mock('/__mock/sms-log')).length;
+  await remRow.click(); await page.waitForSelector('.modal .js-all'); await page.click('.modal .js-all'); await page.waitForTimeout(1500);
+  const rems = (await mock('/__mock/sms-log')).slice(smsBefore);
+  check(rems.length === 2 && rems.some(m => m.Body.includes('9:30')) && await dbGet(`d.jobs.filter(j => j.id.startsWith('rem') && j.remindedAt).length === 2`), 'reminders sent and marked, with the time');
+
   /* ---------- no server: approvals still arrive by themselves (encrypted relay) ---------- */
   await idb(`d.settings.stripeUrl = ''; d.settings.stripeToken = ''; d.settings.stripeStatus = null; d.settings.relayUrl = '${PAY}/relay';
     d.quotes.push({ id: 'qtest3', number: 'Q-9003', customerId: d.customers[2].id, date: '2026-11-21', status: 'sent', sentAt: '2026-11-21', taxRate: 13,
@@ -178,6 +192,29 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
   const q3 = await dbGet(`d.quotes.find(x => x.id === 'qtest3')`);
   check(q3.status === 'approved' && q3.items[1].on === true && q3.signature?.strokes?.length > 0, 'approval arrived automatically, with the extra and signature');
   check((await page.textContent('#main')).includes('Approved online'), 'quote screen updated by itself');
+
+  /* ---------- online booking form → lead ---------- */
+  await go('#/leads'); await page.click('.page-head button:has-text("Booking form")');
+  await page.waitForSelector('.modal a:has-text("Preview the form")');
+  const bookUrl = await page.getAttribute('.modal a:has-text("Preview the form")', 'href');
+  check(bookUrl.includes('request.html#'), 'booking form link made');
+  await page.evaluate(() => document.querySelectorAll('#modalRoot > *').forEach(m => m.remove()));
+  const bk = await ctx.newPage(); bk.on('pageerror', e => errors.push('booking page: ' + e.message));
+  await bk.goto(bookUrl); await bk.waitForSelector('#reqForm');
+  check(await bk.locator('[name=services]').count() >= 2, 'customer can pick services from the price book');
+  await bk.locator('label.chip:has([name=services])').first().click();
+  await bk.fill('#nm', 'Jordan Lee'); await bk.fill('#ph', '647-555-0177'); await bk.fill('#ad', '9 Birch Ave, Toronto');
+  await bk.locator('label.chip:has([value=Sat])').click(); await bk.locator('label.chip:has([value=Morning])').click();
+  await bk.fill('#nt', 'Two storey, side gate code 1234');
+  await bk.click('.req-send'); await bk.waitForSelector('.req-done');
+  await shot(bk, 'booking-done'); await bk.close();
+  const relayRaw = await fetch(`${PAY}/relay/${await dbGet('d.settings.relayTopic')}/json?poll=1`).then(r => r.text());
+  check(!relayRaw.includes('Jordan') && !relayRaw.includes('Birch') && !relayRaw.includes('1234'), 'booking request is encrypted on the relay');
+  await go('#/leads'); await page.waitForTimeout(300);
+  await page.evaluate(() => document.querySelector('[data-act="checkInbox"]')?.click());
+  await page.goto(URL + '#/messages'); await page.waitForSelector('.page-head'); await page.click('button:has-text("Check for updates")'); await page.waitForTimeout(1200);
+  const lead = await dbGet(`d.leads.find(l => l.name === 'Jordan Lee')`);
+  check(lead && lead.phone === '647-555-0177' && lead.address.includes('Birch') && lead.notes.includes('Sat') && lead.notes.includes('gate code') && lead.service, 'booking request became a lead with all the details');
 
   /* ---------- quotes: edit and delete ---------- */
   await go('#/quotes/qtest2');
