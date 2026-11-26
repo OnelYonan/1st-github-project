@@ -1129,6 +1129,7 @@ VIEWS.dashboard = () => {
     `<div class="row hide-sm">${btn('Job', 'newJob', '', '', 'plus')}${btn('Quote', 'newQuote', '', '', 'plus')}${btn('Invoice', 'newInvoice', 'btn-primary', '', 'plus')}</div>`,
     `${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}${todayCount ? ` · ${plural(todayCount, 'job')} today` : ''}`) + welcome + `
   <div class="quick-actions show-sm">${btn('Job', 'newJob', '', '', 'calendar')}${btn('Quote', 'newQuote', '', '', 'quote')}${btn('Invoice', 'newInvoice', '', '', 'invoice')}${btn('Expense', 'newExpense', '', '', 'expense')}</div>
+  ${attn.length ? `<div class="card show-sm" style="margin-bottom:14px"><div class="card-head"><h2>Needs attention</h2></div><div class="attn">${attnHTML}</div></div>` : ''}
   <div class="grid grid-5 dash-stats">
     <a class="card stat" href="#/income" style="color:inherit"><div class="label"><span class="stat-ic" style="--tint:#34C759">${icon('income')}</span>Income this month</div><div class="value">${money(inc)}</div>
       ${goal ? `<div class="progress" title="${goalPct}% of goal"><i style="width:${goalPct}%"></i></div><div class="sub">${goalPct}% of ${money(goal)} goal</div>`
@@ -1139,7 +1140,6 @@ VIEWS.dashboard = () => {
       <div class="sub">${teamOwed ? `<span style="color:var(--warn)">${money(teamOwed)} still owed</span>` : paidBy.length ? paidBy.slice(0, 2).map(([n, v]) => `${esc(n)} ${money(v)}`).join(' · ') : 'No payouts yet'}</div></a>
     <a class="card stat" href="#/invoices" style="color:inherit"><div class="label"><span class="stat-ic" style="--tint:#FF9500">${icon('invoice')}</span>Owed to you</div><div class="value">${money(ar)}</div><div class="sub">${open.length} open · <span style="color:${overdue.length ? 'var(--bad)' : 'inherit'}">${overdue.length} overdue</span></div></a>
   </div>
-  ${attn.length ? `<div class="card show-sm" style="margin-top:16px"><div class="card-head"><h2>Needs attention</h2></div><div class="attn">${attnHTML}</div></div>` : ''}
   <div class="dash-grid">
     <div class="stack">
       <div class="card"><div class="card-head"><h2>Schedule</h2><a href="#/schedule" class="small">Open calendar →</a></div>
