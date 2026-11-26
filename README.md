@@ -4,17 +4,30 @@ Your own booking and business-management app for a home-services business: sched
 
 ## Features
 
-- **Dashboard**: this month's income (with an optional monthly goal), expenses, profit and money owed. It also has a getting-started checklist, alerts (overdue invoices, new leads, jobs to invoice, quotes to follow up, backup reminder), the next 7 days, today's to-dos and a 6-month chart.
-- **Schedule**: month, week and day views, plus a team-member filter. Drag a job to another day to reschedule it. One-tap **Route** opens the day's stops in Google Maps. Jobs can repeat weekly, every 2 weeks, monthly, every 3 months or yearly, and changes can be applied to the rest of a repeating series.
-- **Jobs**: status (scheduled → in progress → completed), before/after **photos**, job costing (link expenses to see real profit), and one-tap texts: *confirm appointment*, *on my way*, *ask for a review*.
-- **Leads**: a board with New → Contacted → Quoted → Won / Lost stages and drag-and-drop. Includes follow-up dates, lead sources, pipeline value and win rate. A lead turns into a customer and quote, or a booked job, in one tap. The lead updates itself when the quote is approved or declined.
-- **To-dos**: reminders with due dates, linked to customers, with quick-add on the dashboard.
-- **Customers**: call, text, email or get directions in one tap. Shows lifetime revenue, balance owing and full history, and prints a **statement** of open invoices. Import from CSV, with a duplicate warning.
-- **Quotes**: printable quotes with an optional **deposit**. Approve, decline or follow up, then convert to a job or invoice. The final invoice automatically subtracts the deposit.
-- **Invoices**: discounts, HST/GST, partial payments, **payment reminders**, an online payment link (Stripe, Square or PayPal), a paid stamp, void, and PDF through Print → Save as PDF.
-- **Income & expenses**: payments are recorded automatically, plus cash income. Expenses have receipt photos, tax paid and **monthly recurring expenses**. There is also a mileage log.
-- **Reports**: profit and loss, a sales-tax summary, expenses by category, top customers, income by lead source, work by team member, accounts-receivable aging, the sales pipeline, and CSV exports.
-- **Price book**, editable **message templates**, **search** across everything (Ctrl/Cmd + K), dark mode, a phone bottom bar, and offline use as a home-screen app.
+**Work**
+- **Dashboard**: a "Needs attention" list, today's schedule and the next 7 days, to-dos, who's on the clock, unpaid invoices, open quotes, and this month's numbers with an optional goal.
+- **Schedule**: month, week and day views, with jobs colour-coded by team member and a team filter. Drag a job to another day to reschedule it. One-tap **Route** opens the day's stops in Google Maps.
+- **Jobs**: a job timer (start → complete), before/after photos, job costing, and one-tap texts (confirm, on my way, review request).
+- **Recurring**: repeat every week, every 2 weeks, monthly, every 3 months, yearly, or **custom**. Custom means every N days, weeks or months on chosen weekdays, ending after a number of visits or on a date. Each plan shows estimated monthly recurring revenue, and you can add visits or stop a plan.
+- **To-dos** with due dates, plus quick-add.
+
+**Sales**
+- **Leads**: a pipeline board with **stages you can rename and add**, follow-ups and sources. A lead turns into a customer and quote, or a job, in one tap.
+- **Customers**: an **activity timeline** (quotes, jobs, invoices, payments and your own notes), contact buttons, statements, and CSV import.
+- **Quotes & invoices**: deposits, payment reminders, an online payment link, PDF, and editable message templates.
+
+**Money**
+- Income, expenses (receipt photos, recurring expenses), mileage, and reports (profit and loss, sales tax, aging, lead sources, team).
+
+**Business**
+- **Team & time**: team members with roles, pay rates and calendar colours, **clock in/out**, and weekly **timesheets** with approval and pay totals.
+- **Price book** and **Settings**, organised into tabs.
+
+**Everyday conveniences**
+- **Address auto-complete**: type part of an address and pick from suggestions (free OpenStreetMap lookup, needs internet).
+- **Undo** after deleting, phone numbers formatted automatically, and a warning before closing a form with unsaved changes.
+- **Search** across everything (Ctrl/Cmd + K), and the app remembers your last views.
+- Phone layout with a bottom tab bar and quick-action buttons. Works offline as a home-screen app.
 
 ## Running it
 

@@ -78,7 +78,9 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   await modalSubmit(); await page.waitForTimeout(150);
   await page.click('.lead-card:has-text("Test Lead")'); await page.click('.modal .js-lead-quote');
   await page.waitForSelector('.modal select[name=customerId]');
-  check(await page.$eval('.modal select[name=customerId]', s => s.options[s.selectedIndex].text) === 'Test Lead', 'lead converted to customer for the quote');
+  const leadSel = await page.$eval('.modal select[name=customerId]', s => s.options[s.selectedIndex].text);
+  check(leadSel === 'Test Lead', `lead converted to customer for the quote (${leadSel})`);
+  if (leadSel !== 'Test Lead') console.log('DEBUG', await page.evaluate(() => [...document.querySelectorAll('.modal')].map(m => m.querySelector('h2').textContent + ' | ' + [...m.querySelectorAll('select[name=customerId] option:checked')].map(o => o.outerHTML).join(';'))));
   await modalSubmit(); await page.waitForSelector('.doc');
   await go('#/leads');
   check(await page.isVisible('.kanban-col[data-stage=quoted] >> text=Test Lead'), 'lead moved to Quoted');
@@ -94,11 +96,11 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   // Repeating job → complete → invoice
   await go('#/schedule'); await page.click('.page-head button:has-text("New job")');
   await page.selectOption('.modal select[name=customerId]', { index: 2 });
-  await page.fill('.modal input[name=title]', 'Weekly lawn'); await page.selectOption('.modal select[name=repeat]', '7');
-  await page.fill('.modal input[name=occurrences]', '4'); await page.fill('.modal [data-k=desc]', 'Lawn maintenance visit');
+  await page.fill('.modal input[name=title]', 'Weekly lawn'); await page.selectOption('.modal select[name=repeat]', 'weekly');
+  await page.fill('.modal input[name=rCount]', '4'); await page.click('.modal details.form-section summary'); await page.fill('.modal [data-k=desc]', 'Lawn maintenance visit');
   await modalSubmit(); await page.waitForSelector('text=Job costing');
   check(await page.evaluate(() => document.querySelectorAll('.page-head').length) === 1, 'job page opened');
-  await page.click('.page-head button:has-text("Mark complete")');
+  await page.click('.page-head button:has-text("Complete")');
   await page.click('.page-head button:has-text("Create invoice")'); await page.waitForSelector('.doc');
   check(page.url().includes('#/invoices/'), 'job converted to invoice');
 
@@ -126,15 +128,72 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   // Statement
   await go('#/customers'); await page.selectOption('select[data-filter="customers:sort"]', 'owing');
   await page.click('tbody tr.clickable >> nth=0'); await page.waitForTimeout(100);
-  if (await page.isVisible('a:has-text("Statement")')) {
-    await page.click('a:has-text("Statement")'); await page.waitForSelector('.doc');
+  await page.click('.page-head [data-menu]');
+  if (await page.isVisible('a:has-text("Print statement")')) {
+    await page.click('a:has-text("Print statement")'); await page.waitForSelector('.doc');
     check(await page.isVisible('.doc h1:has-text("STATEMENT")'), 'customer statement renders');
   }
+
+  // Custom repeat: every week on Mon + Thu, 6 visits
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await go('#/plans'); await page.click('.page-head button:has-text("New recurring job")');
+  await page.selectOption('.modal select[name=customerId]', { index: 3 });
+  await page.fill('.modal input[name=title]', 'Pool cleaning');
+  await page.selectOption('.modal select[name=repeat]', 'custom');
+  for (const d of await page.$$('.modal [name=rDay]:checked')) await d.evaluate(el => { el.checked = false; });
+  await page.check('.modal [name=rDay][value="1"]', { force: true }); await page.check('.modal [name=rDay][value="4"]', { force: true });
+  await page.fill('.modal input[name=rCount]', '6');
+  check((await page.textContent('.modal .js-repeat-preview')).includes('6 visits'), 'custom repeat preview shows 6 visits');
+  await modalSubmit(); await page.waitForSelector('text=Job costing');
+  const days = await page.evaluate(() => new Promise(r => { const q = indexedDB.open('bizhub'); q.onsuccess = () => { const g = q.result.transaction('kv').objectStore('kv').get('bizhub.v1'); g.onsuccess = () => r(JSON.parse(g.result).jobs.filter(j => j.title === 'Pool cleaning').map(j => new Date(j.date + 'T12:00').getDay())); }; }));
+  check(days.length === 6 && days.every(d => d === 1 || d === 4), `custom repeat created Mon/Thu visits (${days.join(',')})`);
+  await go('#/plans');
+  check(await page.isVisible('.plan-row:has-text("Pool cleaning")'), 'recurring page lists the plan');
+  await shot('plans');
+
+  // Team, clock in/out, timesheets
+  await go('#/team'); await page.click('.page-head button:has-text("Add team member")');
+  await page.fill('.modal input[name=name]', 'Sam'); await page.fill('.modal input[name=phone]', '4165551234'); await page.click('.modal input[name=rate]');
+  check(await page.inputValue('.modal input[name=phone]') === '416-555-1234', 'phone number auto-formats');
+  await page.fill('.modal input[name=rate]', '25'); await modalSubmit(); await page.waitForTimeout(150);
+  await page.click('.member-card:has-text("Sam") button:has-text("Clock in")');
+  check(await page.isVisible('.member-card:has-text("Sam") >> text=On the clock'), 'clock in works');
+  await page.click('.member-card:has-text("Sam") button:has-text("Clock out")');
+  await page.click('[data-tab="team:tab:time"]');
+  check(await page.isVisible('.ts-table >> text=Sam'), 'timesheet shows team member');
+  await shot('timesheets');
+
+  // Settings tabs + rename a lead stage
+  await go('#/settings'); await page.click('[data-settab=lists]');
+  await page.fill('.js-stages input >> nth=0', 'New enquiry'); await page.click('#settingsForm button[type=submit]'); await page.waitForTimeout(150);
+  await go('#/leads');
+  check(await page.isVisible('.kanban-head:has-text("New enquiry")'), 'renamed lead stage shows on the board');
+
+  // Undo a delete
+  await go('#/expenses');
+  const before = await page.locator('tbody tr.clickable').count();
+  await page.click('tbody tr.clickable >> nth=0'); await page.click('.modal .js-del'); await page.waitForTimeout(100);
+  await page.click('.toast button:has-text("Undo")'); await page.waitForTimeout(150);
+  check(await page.locator('tbody tr.clickable').count() === before, 'undo restores a deleted expense');
+
+  // Customer note on the activity timeline
+  await go('#/customers'); await page.click('tbody tr.clickable >> nth=0');
+  await page.fill('.note-form input', 'Prefers morning visits'); await page.press('.note-form input', 'Enter'); await page.waitForTimeout(150);
+  check(await page.isVisible('.timeline >> text=Prefers morning visits'), 'note added to activity timeline');
+  await shot('customer');
+
+  // Address suggestions (needs internet)
+  await page.click('.page-head [data-menu]'); await page.click('.menu-item:has-text("Edit customer")');
+  await page.fill('.modal input[name=address]', ''); await page.type('.modal input[name=address]', '100 queen st w toronto', { delay: 20 });
+  const gotAddr = await page.waitForSelector('.addr-menu .addr-opt', { timeout: 8000 }).then(() => true).catch(() => false);
+  console.log(gotAddr ? 'PASS  address suggestions appear' : 'SKIP  address suggestions (address service not reachable from this browser)');
+  if (gotAddr) { await shot('address'); await page.click('.addr-opt >> nth=0'); check(/Toronto/.test(await page.inputValue('.modal input[name=address]')), 'picking a suggestion fills the address'); }
+  acceptDialogs = true; await page.keyboard.press('Escape');
 
   // Phone layout
   const m = page; // same browser profile, so the sample data is there
   await m.setViewportSize({ width: 390, height: 844 });
-  for (const r of ['dashboard', 'schedule', 'leads', 'jobs', 'invoices', 'customers']) {
+  for (const r of ['dashboard', 'schedule', 'leads', 'jobs', 'invoices', 'customers', 'plans', 'team', 'settings']) {
     await m.goto(URL + '#/' + r); await m.waitForTimeout(300);
     const w = await m.evaluate(() => document.documentElement.scrollWidth);
     check(w <= 390, `no sideways scroll on phone: ${r} (${w}px)`);
