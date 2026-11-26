@@ -45,7 +45,15 @@ const findOverflow = () => {
   };
   const go = async hash => { await page.goto(URL + hash); await page.waitForSelector('.page-head, .map-screen', { timeout: 15000 }); };
   const closeModal = async () => { await page.evaluate(() => document.querySelectorAll('#modalRoot > *').forEach(m => m.remove())); };
-  const menu = async label => { const m = page.locator('[data-menu]').first(); if (await m.count()) { await m.click(); await audit(label + ' · More menu'); await page.mouse.click(5, 300); } };
+  // on phones the page's More menu lives behind the ••• in the top bar
+  const menu = async label => {
+    const m = page.locator('#pageMore');
+    if (await m.isVisible()) {
+      await m.tap(); await page.waitForSelector('.sheet-backdrop .action-sheet');
+      if ((await page.locator('.sheet-backdrop').count()) !== 1) { problems++; console.log(`✗ ${label}: tap opened ${await page.locator('.sheet-backdrop').count()} sheets`); }
+      await audit(label + ' · More menu'); await page.mouse.click(5, 100); await page.waitForTimeout(250);
+    }
+  };
   const openFirst = async (sel, label) => { const el = page.locator(sel).first(); if (await el.count()) { await el.click(); await page.waitForTimeout(250); await audit(label); return true; } return false; };
 
   await page.goto(URL); await page.waitForSelector('.page-head');

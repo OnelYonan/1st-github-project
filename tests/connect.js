@@ -193,7 +193,9 @@ const mock = path => fetch(PAY + path, { method: path.includes('log') ? 'GET' : 
     await pp.click('button:has-text("Load sample data")'); await pp.waitForTimeout(300);
     await pp.goto(URL + '#/quotes'); await pp.waitForTimeout(300);
     await pp.locator('.show-sm .list-item').first().tap(); await pp.waitForTimeout(500);
-    await pp.tap('.doc-actions [data-menu]'); await pp.waitForTimeout(400);
+    check(await pp.isVisible('#pageMore'), 'iPhone: ••• More button in the top bar');
+    await pp.tap('#pageMore'); await pp.waitForTimeout(400);
+    check(await pp.locator('.sheet-backdrop').count() === 1, 'iPhone: one tap opens exactly one sheet');
     check(await pp.locator('body > .sheet-backdrop .action-sheet .menu-item:has-text("Delete")').isVisible(), 'iPhone: More opens an action sheet at the top of the page');
     await pp.tap('.action-sheet .menu-item:has-text("Delete")'); await pp.waitForTimeout(500);
     check(await pp.locator('.sheet-backdrop').count() === 0 && pp.url().endsWith('#/quotes'), 'iPhone: Delete in the sheet works and the sheet closes');

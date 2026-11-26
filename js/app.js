@@ -633,6 +633,8 @@ function moreMenu(items, label = 'More') {
 const menuItem = (label, act, data = '', ic = '', cls = '') => `<button type="button" class="menu-item ${cls}" role="menuitem" data-act="${act}" ${data}>${ic ? icon(ic) : ''}${label}</button>`;
 const menuLink = (label, href, ic = '') => `<a class="menu-item" role="menuitem" href="${href}">${ic ? icon(ic) : ''}${label}</a>`;
 function actionSheet(menu) {
+  if (!menu) return;
+  $$('.sheet-backdrop').forEach(x => x.remove()); // never two at once
   const wrap = document.createElement('div');
   wrap.className = 'sheet-backdrop';
   wrap.innerHTML = `<div class="action-sheet" role="menu">${menu.innerHTML}</div>`;
@@ -642,7 +644,23 @@ function actionSheet(menu) {
   document.addEventListener('keydown', esc);
   wrap.addEventListener('click', e => { if (e.target === wrap || e.target.closest('.menu-item')) close(); });
 }
+/** The page's "More" menu (in the page header or document toolbar). */
+const pageMenu = () => { const b = $$('#main .page-head [data-menu], #main .doc-actions [data-menu]').pop(); return b?.nextElementSibling || null; };
+/* iPhone Safari sometimes drops the "click" after a tap. Open menus when the finger lifts,
+ * as long as it didn't move (that was a scroll), and cancel the click that may follow. */
+(() => {
+  let x = 0, y = 0, moved = false;
+  document.addEventListener('touchstart', e => { const t = e.touches[0]; x = t.clientX; y = t.clientY; moved = false; }, { passive: true });
+  document.addEventListener('touchmove', e => { const t = e.touches[0]; if (Math.abs(t.clientX - x) + Math.abs(t.clientY - y) > 10) moved = true; }, { passive: true });
+  document.addEventListener('touchend', e => {
+    const t = e.target.closest?.('[data-menu], #pageMore');
+    if (!t || moved || !isPhone()) return;
+    e.preventDefault();
+    actionSheet(t.id === 'pageMore' ? pageMenu() : t.nextElementSibling);
+  }, { passive: false });
+})();
 document.addEventListener('click', e => {
+  if (e.target.closest('#pageMore')) { actionSheet(pageMenu()); return; }
   const t = e.target.closest('[data-menu]');
   if (t && isPhone()) { e.preventDefault(); e.stopPropagation(); actionSheet(t.nextElementSibling); return; }
   $$('.menu-wrap.open').forEach(w => { if (!t || w !== t.parentElement) { w.classList.remove('open'); $('[data-menu]', w).setAttribute('aria-expanded', 'false'); } });
@@ -904,6 +922,7 @@ function render() {
   hydrateImages($('#main'));
   const h1 = $('#main .page-head h1');
   $('#navTitle').textContent = h1 ? ([...h1.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim() || h1.textContent.trim()) : '';
+  const pm = $('#pageMore'); if (pm) { pm.hidden = !pageMenu(); document.body.classList.toggle('has-page-more', !pm.hidden); }
   const fa = !id && FAB_ACT[name];
   if (fa) $$(`#main .page-head .actions > [data-act="${fa}"]`).forEach(b => b.classList.add('fab-dup'));
   updateNavBar();
@@ -1917,7 +1936,7 @@ function planDetail(id) {
     menuLink('View customer', `#/customers/${p.customerId}`, 'users'),
     menuItem('Delete', 'deletePlan', `data-id="${p.id}"`, 'trash', 'danger'),
   ]), `<a class="crumb" href="#/plans">← All plans</a><span class="crumb"> · </span><a href="#/customers/${c.id}">${esc(c.name || '')}</a>`) + `
-  ${st === 'sent' ? `<div class="alert info no-print" style="margin:0 auto 12px;max-width:820px">${icon('share')}<span>Sent for signature ${fmtDate(p.sentAt)}. When ${esc(firstName(c.name))} signs, they send you a link. Open it on this device to record the signature.</span></div>` : ''}
+  ${st === 'sent' ? `<div class="alert info no-print" style="margin:0 auto 12px;max-width:820px">${icon('share')}<span>Sent for signature ${fmtDate(p.sentAt)}. ${relayOn() || serverHas('inbox') ? `This page updates by itself when ${esc(firstName(c.name))} signs, and the plan starts. <button class="link-btn" data-act="checkInbox">Check now</button>` : `When ${esc(firstName(c.name))} signs, they send you a link. Open it on this device to record the signature.`}</span></div>` : ''}
   ${st === 'active' && !card ? `<div class="alert warn no-print" style="margin:0 auto 12px;max-width:820px">${icon('expense')}<span>No card on file for ${esc(c.name)}. <button class="link-btn" data-act="newCard" data-id="${c.id}">Add a card</button> so you can charge plan payments and fees.</span></div>` : ''}
   <div class="plan-layout">
     <div>${planDocHTML(p)}</div>

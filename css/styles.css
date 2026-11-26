@@ -1574,3 +1574,15 @@ input[type=file]::file-selector-button {
 .action-sheet .menu-item:active { background: var(--surface-3) !important; }
 .action-sheet .menu-cancel:hover { background: var(--surface) !important; }
 .action-sheet .menu-item svg, .action-sheet .menu-item:hover svg { background: none !important; }
+
+/* ============ v14: ••• in the top bar holds the page's More menu on phones ============ */
+#pageMore[hidden] { display: none !important; }
+#pageMore svg { width: 20px; height: 20px; }
+@media (min-width: 761px) { #pageMore { display: none !important; } }
+@media (max-width: 760px) {
+  body.has-page-more .page-head .actions > .menu-wrap, body.has-page-more .doc-actions > .menu-wrap { display: none; }
+  body.has-page-more #searchBtn { display: none; }
+  #mobileClock .clock-btn:not(.on) .clock-label { display: none; }
+  #mobileClock .clock-btn:not(.on) { width: 36px; padding: 0; justify-content: center; }
+  .page-head .actions, .doc-actions { padding-right: 16px; }
+}
