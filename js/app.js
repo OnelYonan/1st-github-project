@@ -144,7 +144,8 @@ const idb = (() => {
     const t = d.transaction('kv', mode); const req = fn(t.objectStore('kv'));
     t.oncomplete = () => res(req.result); t.onerror = t.onabort = () => rej(t.error);
   }));
-  return { get: k => tx('readonly', st => st.get(k)), set: (k, v) => tx('readwrite', st => st.put(v, k)) };
+  return { get: k => tx('readonly', st => st.get(k)), set: (k, v) => tx('readwrite', st => st.put(v, k)),
+    del: k => tx('readwrite', st => st.delete(k)), keys: () => tx('readonly', st => st.getAllKeys()) };
 })();
 let storageMode = 'idb';
 let db = blank();
@@ -160,6 +161,68 @@ async function load() {
     try { const raw = localStorage.getItem(KEY); if (raw) return normalize(JSON.parse(raw)); } catch { /* ignore */ }
     return blank();
   }
+}
+/* Photos and receipts are stored separately ("img:<id>"), so saving your data never
+ * rewrites every photo. Records keep a small reference: { img: id } (or { src } in fallback mode). */
+const imgCache = new Map();
+const BLANK_IMG = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+async function putImage(dataUrl) {
+  if (storageMode !== 'idb') return { src: dataUrl };
+  const id = 'img_' + uid();
+  await idb.set('img:' + id, dataUrl); imgCache.set(id, dataUrl);
+  return { img: id };
+}
+async function getImage(id) {
+  if (imgCache.has(id)) return imgCache.get(id);
+  const v = await idb.get('img:' + id).catch(() => null);
+  if (v) imgCache.set(id, v);
+  return v || '';
+}
+const imgAttr = ref => (ref?.src ? `src="${ref.src}"` : ref?.img ? `src="${BLANK_IMG}" data-img="${ref.img}"` : `src="${BLANK_IMG}"`);
+function hydrateImages(root = document) {
+  $$('[data-img]', root).forEach(async el => { const v = await getImage(el.dataset.img); if (!v) return; el.src = v; el.removeAttribute('data-img'); });
+  $$('[data-img-href]', root).forEach(async el => { const v = await getImage(el.dataset.imgHref); if (v) { el.href = v; el.removeAttribute('data-img-href'); } });
+}
+const imageIds = d => [...(d.jobs || []).flatMap(j => (j.photos || []).map(ph => ph.img)), ...(d.expenses || []).map(e => e.receiptImg)].filter(Boolean);
+/** Move photos saved inside records (older versions) into the image store, and tidy unused images. */
+async function migrateImages() {
+  if (storageMode !== 'idb') return;
+  let moved = 0;
+  for (const j of db.jobs) for (const ph of j.photos || []) if (ph.src) { Object.assign(ph, await putImage(ph.src)); delete ph.src; moved++; }
+  for (const e of db.expenses) if (e.receipt) { e.receiptImg = (await putImage(e.receipt)).img; e.receipt = ''; moved++; }
+  if (moved) save();
+  try {
+    const used = new Set(imageIds(db)), keys = await idb.keys();
+    for (const k of keys) if (String(k).startsWith('img:') && !used.has(String(k).slice(4))) await idb.del(k);
+  } catch { /* tidy-up is optional */ }
+}
+/* Automatic daily snapshots (last 7 days) so a bad change or an erase can be rolled back. */
+async function takeSnapshot(force = false) {
+  if (storageMode !== 'idb') return;
+  if (!force && !db.customers.length && !db.jobs.length && !db.invoices.length) return; // nothing worth keeping yet
+  try {
+    const key = 'snap:' + today(), keys = (await idb.keys()).map(String);
+    if (!force && keys.includes(key)) return;
+    await idb.set(key, JSON.stringify({ ...db, settings: { ...db.settings, stripeToken: '' } }));
+    const snaps = keys.filter(k => k.startsWith('snap:')).concat(keys.includes(key) ? [] : [key]).sort();
+    for (const k of snaps.slice(0, -7)) await idb.del(k);
+  } catch { /* snapshots are a bonus; never block the app */ }
+}
+async function listSnapshots() {
+  if (storageMode !== 'idb') return [];
+  const keys = (await idb.keys()).map(String).filter(k => k.startsWith('snap:')).sort().reverse();
+  const out = [];
+  for (const k of keys) {
+    try { const d = JSON.parse(await idb.get(k)); out.push({ key: k, date: k.slice(5), customers: d.customers?.length || 0, jobs: d.jobs?.length || 0, invoices: d.invoices?.length || 0 }); } catch { /* skip broken */ }
+  }
+  return out;
+}
+async function restoreSnapshot(key) {
+  const d = JSON.parse(await idb.get(key));
+  const keepToken = db.settings.stripeToken;
+  await idb.set('undo:before-restore', JSON.stringify(db));
+  db = normalize(d); if (keepToken) db.settings.stripeToken = keepToken;
+  refresh(); go('#/dashboard'); toast(`Restored your data from ${fmtDate(key.slice(5))}`);
 }
 let saveChain = Promise.resolve();
 function save() {
@@ -193,6 +256,7 @@ function fillTemplate(key, vars) {
   return String(s[key] || DEFAULT_SETTINGS[key] || '').replace(/\{(\w+)\}/g, (m, k) => all[k] ?? '').replace(/\n{3,}/g, '\n\n').trim();
 }
 function custVars(c) { return { customer: c?.name || '', first: firstName(c?.name) }; }
+const safeUrl = u => (/^https?:\/\//i.test(String(u || '').trim()) ? String(u).trim() : '');
 const smsHref = (phone, text) => `sms:${encodeURIComponent(phone || '')}${text ? '?&body=' + encodeURIComponent(text) : ''}`;
 const mailHref = (email, subject, body) => `mailto:${encodeURIComponent(email || '')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 
@@ -322,7 +386,11 @@ function modal({ title, body, wide = false, submitLabel = 'Save', onSubmit, onMo
   return { form, close };
 }
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { $('#modalRoot .modal-backdrop:last-child')?._requestClose(); return; }
+  if (e.key === 'Escape') {
+    const openMenu = $('.menu-wrap.open');
+    if (openMenu) { openMenu.classList.remove('open'); $('[data-menu]', openMenu)?.setAttribute('aria-expanded', 'false'); return; }
+    $('#modalRoot .modal-backdrop:last-child')?._requestClose(); return;
+  }
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
   if ((e.key === 'k' && (e.ctrlKey || e.metaKey)) || (e.key === '/' && !typing && !$('#modalRoot').children.length)) { e.preventDefault(); openSearch(); }
 });
@@ -449,7 +517,9 @@ function download(name, text, type = 'text/plain') {
   document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 }
 function csv(rows) {
-  return rows.map(r => r.map(v => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(',')).join('\n');
+  // A cell starting with = + - @ could run as a formula in Excel; prefix text like that with '
+  const cell = v => { let s = String(v ?? ''); if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = "'" + s; return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  return rows.map(r => r.map(cell).join(',')).join('\n');
 }
 
 /* ----- undo ----- */
@@ -592,7 +662,6 @@ const DEFAULT_LEAD_STAGES = [{ id: 'new', label: 'New' }, { id: 'contacted', lab
 const openStages = () => (db.settings.leadStages?.length ? db.settings.leadStages : DEFAULT_LEAD_STAGES);
 const leadStages = () => [...openStages().map(s => [s.id, s.label]), ['won', 'Won'], ['lost', 'Lost']];
 const firstStage = () => openStages()[0].id;
-const stageLabel = id => leadStages().find(s => s[0] === id)?.[1] || id;
 
 /* ----- team ----- */
 const TEAM_COLORS = ['#257de0', '#f47230', '#00a888', '#d28e05', '#e24d8b', '#0aac23', '#6a4ce2', '#eb6263'];
@@ -715,7 +784,9 @@ function render() {
   const html = view(id ? decodeURIComponent(id) : undefined);
   if (html !== undefined) $('#main').innerHTML = html + (id ? '' : fab(name));
   unmountView = view.mount?.(id) || null;
-  document.title = (db.settings.businessName || 'Business Hub');
+  hydrateImages($('#main'));
+  const pageLabel = NAV.find(n => n[0] === name)?.[1];
+  document.title = [id ? '' : pageLabel, db.settings.businessName || 'Business Hub'].filter(Boolean).join(' · ');
 }
 const isPhone = () => matchMedia('(max-width: 760px)').matches;
 const fab = name => {
@@ -728,6 +799,12 @@ const refresh = () => { save(); render(); };
 const head = (title, actions = '', sub = '') => `<div class="page-head"><div><h1>${title}</h1>${sub ? `<div class="muted small">${sub}</div>` : ''}</div><div class="actions">${actions}</div></div>`;
 const btn = (label, act, cls = '', data = '', ic = '') => `<button class="btn ${cls}" data-act="${act}" ${data}>${ic ? icon(ic) : ''}${label}</button>`;
 const empty = (ic, msg, action = '') => `<div class="empty">${icon(ic)}<div>${msg}</div>${action ? `<div style="margin-top:12px">${action}</div>` : ''}</div>`;
+/** Long lists show 100 rows at a time so phones stay quick. */
+function paged(list, key) {
+  const lim = state.limits?.[key] || 100;
+  return { rows: list.slice(0, lim), more: list.length > lim
+    ? `<div class="show-more">${btn(`Show more (${list.length - lim} more)`, 'showMore', 'btn-sm', `data-k="${key}"`)}</div>` : '' };
+}
 const tabsHTML = (view, key, list, cur) => `<div class="tabs">${list.map(([k, l]) => `<button data-tab="${view}:${key}:${k}" class="${k === cur ? 'active' : ''}">${l}</button>`).join('')}</div>`;
 
 /* =====================================================================
@@ -776,10 +853,10 @@ VIEWS.dashboard = () => {
   const welcome = installTip + (isEmpty ? `<div class="card" style="margin-bottom:16px"><h2>Welcome! Let’s get your business set up 👋</h2>
     <p class="muted">Add your business details and logo so they appear on quotes and invoices, then add your first customer.
     Want to look around first? Load sample data. You can erase it any time from Settings.</p>
-    <div class="row"><a class="btn btn-primary" href="#/settings">Set up my business</a>${btn('Add a customer', 'newCustomer')}${btn('Load sample data', 'loadSample')}</div></div>`
+    <div class="row">${btn('Set up my business', 'quickSetup', 'btn-primary')}${btn('Add a customer', 'newCustomer')}${btn('Load sample data', 'loadSample')}</div></div>`
     : setupLeft && !s.hideSetup ? `<div class="card" style="margin-bottom:16px"><div class="card-head"><h2>Getting started · ${4 - setupLeft} of 4 done</h2>${btn('Hide', 'hideSetup', 'btn-sm')}</div>
       <div class="progress" style="margin-bottom:10px"><i style="width:${(4 - setupLeft) * 25}%"></i></div>
-      ${setupSteps.map(([done, label, href]) => `<a class="setup-step ${done ? 'done' : ''}" href="${href}">${icon(done ? 'check' : 'plus')}<span>${label}</span></a>`).join('')}</div>` : '');
+      ${setupSteps.map(([done, label, href]) => `<a class="setup-step ${done ? 'done' : ''}" href="${href}" ${href === '#/settings' && !done ? 'data-act="quickSetup"' : ''}>${icon(done ? 'check' : 'plus')}<span>${label}</span></a>`).join('')}</div>` : '');
 
   // money paid to employees this month: wage/commission payouts recorded as expenses
   const wages = db.expenses.filter(x => inRange(x.date, m0, m1) && (x.isCommission || x.category === 'Wages & Payroll'));
@@ -999,15 +1076,16 @@ VIEWS.jobs = id => {
     .filter(j => !q || `${j.title} ${custName(j.customerId)} ${j.address} ${j.assignedTo}`.toLowerCase().includes(q));
   list.sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || '')));
   if (tab === 'completed' || tab === 'all') list.reverse();
+  const pg = paged(list, 'jobs');
   const count = k => db.jobs.filter(tests[k]).length;
   return head('Jobs', btn('New job', 'newJob', 'btn-primary', '', 'plus')) + `<div class="card">
     ${tabsHTML('jobs', 'tab', [['upcoming', `Upcoming (${count('upcoming')})`], ['late', `Past due (${count('late')})`], ['uninvoiced', `To invoice (${count('uninvoiced')})`], ['completed', 'Completed'], ['all', 'All']], tab)}
     <div class="toolbar"><input type="search" placeholder="Search jobs…" value="${esc(q)}" data-filter="jobs:q"></div>
-    ${list.length ? `<div class="show-sm">${list.map(jobListItem).join('')}</div><div class="table-wrap hide-sm"><table><thead><tr><th>Date</th><th>Job</th><th class="hide-sm">Customer</th><th class="hide-sm">Assigned</th><th>Status</th><th class="num">Value</th></tr></thead><tbody>
-    ${list.map(j => `<tr class="clickable" data-href="#/jobs/${j.id}"><td>${j.date ? fmtDateShort(j.date) : '<span class="muted">Unscheduled</span>'}<div class="muted small">${fmtTime(j.start)}</div></td>
+    ${list.length ? `<div class="show-sm">${pg.rows.map(jobListItem).join('')}</div><div class="table-wrap hide-sm"><table><thead><tr><th>Date</th><th>Job</th><th class="hide-sm">Customer</th><th class="hide-sm">Assigned</th><th>Status</th><th class="num">Value</th></tr></thead><tbody>
+    ${pg.rows.map(j => `<tr class="clickable" data-href="#/jobs/${j.id}"><td>${j.date ? fmtDateShort(j.date) : '<span class="muted">Unscheduled</span>'}<div class="muted small">${fmtTime(j.start)}</div></td>
       <td><b>${esc(j.title)}</b><div class="muted small">${esc(j.address || '')}</div></td><td class="hide-sm">${esc(custName(j.customerId))}</td>
       <td class="hide-sm">${esc(j.assignedTo || '')}</td><td>${badge(j.status)}${j.invoiceId ? ' <span class="badge">invoiced</span>' : ''}</td><td class="num">${money(jobValue(j))}</td></tr>`).join('')}
-    </tbody></table></div>` : empty('jobs', 'No jobs here.', btn('New job', 'newJob', 'btn-sm'))}</div>`;
+    </tbody></table></div>${pg.more}` : empty('jobs', 'No jobs here.', btn('New job', 'newJob', 'btn-sm'))}</div>`;
 };
 
 function jobDetail(id) {
@@ -1080,7 +1158,7 @@ function jobDetail(id) {
   </div>
   <div class="card"><div class="card-head"><h2>Photos</h2>
     <label class="btn btn-sm">${icon('camera')}Add photos<input type="file" accept="image/*" multiple class="js-job-photos" data-id="${j.id}" hidden></label></div>
-    ${photos.length ? `<div class="photo-grid">${photos.map(ph => `<button class="photo" data-act="viewPhoto" data-id="${j.id}" data-pid="${ph.id}" aria-label="View photo"><img src="${ph.src}" alt="" loading="lazy"></button>`).join('')}</div>`
+    ${photos.length ? `<div class="photo-grid">${photos.map(ph => `<button class="photo" data-act="viewPhoto" data-id="${j.id}" data-pid="${ph.id}" aria-label="View photo"><img ${imgAttr(ph)} alt=""></button>`).join('')}</div>`
       : '<p class="muted small" style="margin:0">Add before and after photos to protect yourself and show customers your work.</p>'}</div>
   <div class="card"><h2 style="margin-bottom:10px">Line items</h2>${itemsTable(inv || j)}
     ${inv ? `<p class="muted small">Showing the line items from invoice ${esc(inv.number)}.</p>` : ''}</div>
@@ -1274,7 +1352,12 @@ function memberForm(m) {
       Object.assign(m, { name: d.name.trim(), phone: d.phone, email: d.email.trim(), role: d.role, rate: +d.rate || 0, color: d.color || m.color,
         cleanerPct: d.cleanerPct === '' ? null : +d.cleanerPct, salesPct: d.salesPct === '' ? null : +d.salesPct });
       if (isNew) { m.id = uid(); db.team.push(m); }
-      else if (oldName && oldName !== m.name) db.jobs.forEach(j => { if (j.assignedTo === oldName) j.assignedTo = m.name; });
+      else if (oldName && oldName !== m.name) {
+        db.jobs.forEach(j => { if (j.assignedTo === oldName) j.assignedTo = m.name; if (j.salesRep === oldName) j.salesRep = m.name; });
+        [...db.customers, ...db.subscriptions].forEach(x => { if (x.salesRep === oldName) x.salesRep = m.name; });
+        db.subscriptions.forEach(x => { if (x.assignedTo === oldName) x.assignedTo = m.name; });
+        db.pins.forEach(pin => (pin.history || []).forEach(h => { if (h.rep === oldName) h.rep = m.name; }));
+      }
       refresh(); toast(isNew ? `${m.name} added` : 'Saved');
     } });
 }
@@ -1763,7 +1846,7 @@ async function planSignLink(p) {
       termMonths: +p.termMonths || 12, minVisits: +p.minVisits || 0, fee: +p.cancelFee ? money(p.cancelFee) : '',
       items: [...(p.items || []).map(i => [i.desc, String(+i.qty), money(i.price)]),
         ...(p.addons || []).map(a => [`Add-on: ${a.desc} (${a.when === 'once' ? 'once a term' : 'every visit'})`, '1', money(a.price)])] },
-    t: planTermsText(p), cs: s.cardSetupLink || '',
+    t: planTermsText(p), cs: safeUrl(s.cardSetupLink),
   };
   return `${base}sign.html#${await BH.pack(payload)}`;
 }
@@ -1897,7 +1980,7 @@ function cancelPlanForm(p) {
 /* ----- charging a card on file ----- */
 function chargeCard(inv) {
   const c = cust(inv.customerId), card = defaultCard(inv.customerId), bal = balance(inv);
-  const url = card?.link || db.settings.processorUrl;
+  const url = safeUrl(card?.link) || safeUrl(db.settings.processorUrl);
   modal({ title: `Charge ${money(bal)}`, submitLabel: 'Record payment', body: `
     ${card ? `<div class="card-row" style="margin-bottom:12px"><span class="card-chip">${esc(card.brand.split(' ')[0])}</span><div class="grow"><b>${esc(cardLabel(card))}</b>
       <div class="muted small">${esc(c?.name || '')} · exp ${esc(card.exp)}${card.processor ? ' · saved in ' + esc(card.processor) : ''}</div></div></div>` : ''}
@@ -1933,6 +2016,24 @@ function clockCard() {
       ${btn(e ? 'Clock out' : 'Clock in', 'myClock', e ? '' : 'btn-primary', '', 'clock')}</div>
     ${others.length ? `<div class="muted small" style="margin-top:10px">Also on the clock: ${others.map(x => `<span class="dot" style="background:${x.color}"></span>${esc(x.name)} since ${fmtClock(openEntry(x.id).in)}`).join(' · ')}</div>` : ''}
   </div>`;
+}
+/** One short screen with what customers see on quotes, invoices and agreements. */
+function quickSetupForm() {
+  const s = db.settings;
+  modal({ title: 'Set up your business', submitLabel: 'Save', body: `<p class="muted small" style="margin-top:0">This appears on your quotes, invoices and service agreements. Customers send signed agreements back to your phone or email.</p>
+    <div class="form-grid">
+      ${field('Business name *', inp('businessName', s.businessName, 'required placeholder="e.g. Yonan Window Cleaning"'), 'full')}
+      ${field('Your name', inp('ownerName', s.ownerName))}${field('Phone', inp('phone', s.phone, 'type="tel"'))}
+      ${field('Email', inp('email', s.email, 'type="email"'), 'full')}
+      ${field('Business address', addrInput('address', s.address), 'full')}
+      ${field(`Sales tax`, `<div class="row" style="flex-wrap:nowrap">${inp('taxName', s.taxName, 'style="max-width:90px" aria-label="Tax name"')}<div class="pct-input" style="flex:1">${inp('taxRate', s.taxRate, 'type="number" step="0.001" min="0" aria-label="Tax rate"')}<span>%</span></div></div>`)}
+      ${field('HST / business number (optional)', inp('taxNumber', s.taxNumber))}
+    </div><p class="muted small">Logo, payment details and everything else: Settings.</p>`,
+    onSubmit: (f, d) => {
+      Object.assign(s, { businessName: d.businessName.trim(), ownerName: d.ownerName.trim(), phone: d.phone, email: d.email.trim(), address: d.address, taxName: d.taxName || 'HST', taxRate: +d.taxRate || 0, taxNumber: d.taxNumber });
+      if (s.ownerName && !db.team.length) { const m = { id: uid(), name: s.ownerName, role: 'Owner', color: TEAM_COLORS[0], phone: s.phone, email: s.email, rate: 0 }; db.team.push(m); s.meId = m.id; }
+      refresh(); toast('Business details saved');
+    } });
 }
 function chooseMe(then) {
   if (!db.team.length) {
@@ -2059,7 +2160,10 @@ async function mountMap() {
   geoCtl = new ml.GeolocateControl({ positionOptions: { enableHighAccuracy: true }, trackUserLocation: true, showUserHeading: true, fitBoundsOptions: { maxZoom: 18 } });
   m.addControl(geoCtl, 'top-left'); // its button is hidden; we trigger it from our own
   geoCtl.on('geolocate', e => { lastPos = [e.coords.latitude, e.coords.longitude]; });
-  m.on('moveend', () => { const c = m.getCenter(); state.mapView = { c: [c.lat, c.lng], z: m.getZoom(), b: m.getBearing(), p: m.getPitch() }; });
+  m.on('moveend', () => {
+    const c = m.getCenter(); state.mapView = { c: [c.lat, c.lng], z: m.getZoom(), b: m.getBearing(), p: m.getPitch() };
+    if (db.pins.length > 400 && m.isStyleLoaded()) drawPins(); // big pin sets: redraw what's around you
+  });
   const syncCompass = () => {
     const comp = $('.js-compass'); if (!comp) return;
     comp.classList.toggle('hidden', Math.abs(m.getBearing()) < 0.5 && m.getPitch() < 0.5);
@@ -2088,9 +2192,12 @@ function drawPins() {
   pinMarkers.forEach(mk => mk.remove()); pinMarkers = [];
   const show = filt('canvass', 'show', 'all'), when = filt('canvass', 'when', 'all');
   const from = { today: today(), week: addDays(today(), -parseD(today()).getDay()), month: monthStart(today()) }[when] || '';
-  for (const p of db.pins) {
-    if (show !== 'all' && p.status !== show) continue;
-    if (from && ((p.history || []).at(-1)?.at || '').slice(0, 10) < from) continue;
+  let list = db.pins.filter(p => (show === 'all' || p.status === show) && (!from || ((p.history || []).at(-1)?.at || '').slice(0, 10) >= from));
+  if (list.length > 400) {
+    const bb = map.getBounds(), dy = (bb.getNorth() - bb.getSouth()) * .35, dx = (bb.getEast() - bb.getWest()) * .35;
+    list = list.filter(p => p.lat <= bb.getNorth() + dy && p.lat >= bb.getSouth() - dy && p.lng <= bb.getEast() + dx && p.lng >= bb.getWest() - dx).slice(-700);
+  }
+  for (const p of list) {
     const el = document.createElement('button');
     el.type = 'button'; el.className = 'knock-pin'; el.innerHTML = knockIcon(p.status, 30);
     el.setAttribute('aria-label', `${KNOCK[p.status]?.label || 'Pin'}: ${p.address || 'house'}`);
@@ -2603,17 +2710,18 @@ VIEWS.customers = id => {
   const list = db.customers.filter(c => !q || `${c.name} ${c.email} ${c.phone} ${c.address} ${c.tags}`.toLowerCase().includes(q))
     .sort(sort === 'revenue' ? (a, b) => stats[b.id].paid - stats[a.id].paid : sort === 'owing' ? (a, b) => stats[b.id].owing - stats[a.id].owing
       : sort === 'recent' ? (a, b) => (b.createdAt || '').localeCompare(a.createdAt || '') : (a, b) => a.name.localeCompare(b.name));
+  const pg = paged(list, 'customers');
   return head('Customers', btn('Import CSV', 'importCustomers', '', '', 'download') + btn('New customer', 'newCustomer', 'btn-primary', '', 'plus'), `${db.customers.length} total`) + `<div class="card">
     <div class="toolbar"><input type="search" placeholder="Search name, phone, email, address…" value="${esc(q)}" data-filter="customers:q">
       <select data-filter="customers:sort" style="width:auto" aria-label="Sort">${opts([['name', 'Sort: Name'], ['recent', 'Sort: Newest'], ['revenue', 'Sort: Top revenue'], ['owing', 'Sort: Owing']], sort)}</select></div>
-    ${list.length ? `<div class="show-sm">${list.map(c => { const s = stats[c.id]; return `<a class="list-item" style="color:inherit" href="#/customers/${c.id}"><div class="grow">
+    ${list.length ? `<div class="show-sm">${pg.rows.map(c => { const s = stats[c.id]; return `<a class="list-item" style="color:inherit" href="#/customers/${c.id}"><div class="grow">
       <div class="title">${esc(c.name)}</div><div class="muted small">${esc(c.phone || c.email || c.address || '')}</div></div>
       <div class="right">${s.owing > 0 ? `<div class="num" style="color:var(--bad)">${money(s.owing)}</div><div class="muted small">owing</div>` : `<div class="num muted">${money(s.paid)}</div>`}</div></a>`; }).join('')}</div>
     <div class="table-wrap hide-sm"><table><thead><tr><th>Name</th><th class="hide-sm">Phone</th><th class="hide-sm">Email</th><th class="num">Lifetime</th><th class="num">Owing</th></tr></thead><tbody>
-    ${list.map(c => { const s = stats[c.id]; return `<tr class="clickable" data-href="#/customers/${c.id}"><td><b>${esc(c.name)}</b><div class="muted small">${esc(c.address || '')}</div></td>
+    ${pg.rows.map(c => { const s = stats[c.id]; return `<tr class="clickable" data-href="#/customers/${c.id}"><td><b>${esc(c.name)}</b><div class="muted small">${esc(c.address || '')}</div></td>
       <td class="hide-sm">${esc(c.phone || '')}</td><td class="hide-sm">${esc(c.email || '')}</td><td class="num">${money(s.paid)}</td>
       <td class="num" style="color:${s.owing > 0 ? 'var(--bad)' : 'inherit'}">${s.owing > 0 ? money(s.owing) : '—'}</td></tr>`; }).join('')}
-    </tbody></table></div>` : empty('users', q ? 'No matches.' : 'No customers yet.', q ? '' : btn('Add your first customer', 'newCustomer', 'btn-sm'))}</div>`;
+    </tbody></table></div>${pg.more}` : empty('users', q ? 'No matches.' : 'No customers yet.', q ? '' : btn('Add your first customer', 'newCustomer', 'btn-sm'))}</div>`;
 };
 function custStats(cid) {
   const invs = db.invoices.filter(i => i.customerId === cid && !i.void);
@@ -2694,7 +2802,7 @@ function payBlock() {
   const s = db.settings;
   if (!s.paymentInstructions && !s.paymentLink) return '';
   return `<div class="notes"><div class="lbl">How to pay</div>${esc(s.paymentInstructions)}
-    ${s.paymentLink ? `<div style="margin-top:6px">Pay online: <a href="${esc(s.paymentLink)}" target="_blank" rel="noopener">${esc(s.paymentLink)}</a></div>` : ''}</div>`;
+    ${safeUrl(s.paymentLink) ? `<div style="margin-top:6px">Pay online: <a href="${esc(safeUrl(s.paymentLink))}" target="_blank" rel="noopener">${esc(s.paymentLink)}</a></div>` : ''}</div>`;
 }
 
 /* ---------- Quotes ---------- */
@@ -2711,8 +2819,8 @@ VIEWS.quotes = id => {
     <div class="toolbar"><input type="search" placeholder="Search quotes…" value="${esc(q)}" data-filter="quotes:q"></div>
     ${list.length ? docTable(list, 'quotes', x => quoteStatus(x), x => x.validUntil ? 'Valid to ' + fmtDate(x.validUntil) : '') : empty('quote', 'No quotes here.', btn('New quote', 'newQuote', 'btn-sm'))}</div>`;
 };
-function docTable(list, route, statusFn, extraFn) {
-  const isInv = route === 'invoices';
+function docTable(all, route, statusFn, extraFn) {
+  const isInv = route === 'invoices', pg = paged(all, route), list = pg.rows;
   return `<div class="show-sm">${list.map(x => `<a class="list-item" style="color:inherit" href="#/${route}/${x.id}"><div class="grow">
       <div class="title">${esc(custName(x.customerId))}</div><div class="muted small">${esc(x.number)} · ${extraFn(x) || fmtDate(x.date)}</div></div>
       <div class="right"><div class="num">${money(isInv && balance(x) > 0 ? balance(x) : totals(x).total)}</div>${badge(statusFn(x))}</div></a>`).join('')}</div>
@@ -2720,7 +2828,7 @@ function docTable(list, route, statusFn, extraFn) {
     ${list.map(x => `<tr class="clickable" data-href="#/${route}/${x.id}"><td><b>${esc(x.number)}</b></td><td>${esc(custName(x.customerId))}</td>
     <td class="hide-sm">${fmtDate(x.date)}<div class="muted small">${extraFn(x)}</div></td><td>${badge(statusFn(x))}</td><td class="num">${money(totals(x).total)}</td>
     ${route === 'invoices' ? `<td class="num">${balance(x) > 0 ? money(balance(x)) : '—'}</td>` : ''}</tr>`).join('')}
-  </tbody></table></div>`;
+  </tbody></table></div>${pg.more}`;
 }
 
 /* ---------- Invoices ---------- */
@@ -2845,7 +2953,7 @@ function docView(type, id) {
 VIEWS.income = () => {
   const p = filt('income', 'period', 'this_month');
   const [from, to] = periodRange(p, state.filters.income);
-  const list = incomeEntries().filter(x => inRange(x.date, from, to));
+  const list = incomeEntries().filter(x => inRange(x.date, from, to)), pg = paged(list, 'income');
   const byMethod = {};
   list.forEach(x => byMethod[x.method || 'Other'] = (byMethod[x.method || 'Other'] || 0) + x.amount);
   return head('Income', btn('Add other income', 'newIncome', 'btn-primary', '', 'plus'), 'Invoice payments are added automatically. Use “other income” for cash jobs without an invoice.') + `
@@ -2853,10 +2961,10 @@ VIEWS.income = () => {
   <div class="grid grid-3"><div class="card stat"><div class="label">Total received</div><div class="value">${money(sum(list, x => x.amount))}</div><div class="sub">${list.length} payments</div></div>
     <div class="card" style="grid-column:span 2"><h3 style="margin-bottom:6px">By payment method</h3>${hbars(Object.entries(byMethod).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value), sum(list, x => x.amount))}</div></div>
   <div class="card">${list.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Source</th><th class="hide-sm">Customer</th><th class="hide-sm">Method</th><th class="num">Amount</th></tr></thead><tbody>
-    ${list.map(x => `<tr class="clickable" ${x.kind === 'payment' ? `data-href="#/invoices/${x.invoiceId}"` : `data-act="editIncome" data-id="${x.id}"`}>
+    ${pg.rows.map(x => `<tr class="clickable" ${x.kind === 'payment' ? `data-href="#/invoices/${x.invoiceId}"` : `data-act="editIncome" data-id="${x.id}"`}>
       <td>${fmtDate(x.date)}</td><td>${esc(x.source || x.description || 'Income')}${x.kind === 'other' && x.description && x.source ? `<div class="muted small">${esc(x.description)}</div>` : ''}</td>
       <td class="hide-sm">${esc(x.customerId ? custName(x.customerId) : '')}</td><td class="hide-sm">${esc(x.method || '')}</td><td class="num">${money(x.amount)}</td></tr>`).join('')}
-  </tbody></table></div>` : empty('income', 'No income recorded for this period.')}</div>`;
+  </tbody></table></div>${pg.more}` : empty('income', 'No income recorded for this period.')}</div>`;
 };
 function customRange(view, p) {
   if (p !== 'custom') return '';
@@ -2895,10 +3003,10 @@ VIEWS.expenses = () => {
     <div class="sub">${list.length} items · ${esc(db.settings.taxName)} paid ${money(sum(list, e => e.tax))}</div></div>
     <div class="card" style="grid-column:span 2"><h3 style="margin-bottom:6px">By category</h3>${hbars(catRows.slice(0, 6), total)}</div></div>
   <div class="card">${list.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Vendor</th><th>Category</th><th class="hide-sm">Job</th><th class="num">Amount</th></tr></thead><tbody>
-    ${list.map(e => { const j = e.jobId && byId('jobs', e.jobId); return `<tr class="clickable" data-act="editExpense" data-id="${e.id}"><td>${fmtDate(e.date)}</td>
-      <td>${esc(e.vendor || '—')} ${e.receipt ? `<span title="Receipt attached">${icon('receipt', 'muted').replace('<svg', '<svg style="width:14px;height:14px;vertical-align:-2px"')}</span>` : ''}<div class="muted small">${esc(e.notes || '')}</div></td>
+    ${paged(list, 'expenses').rows.map(e => { const j = e.jobId && byId('jobs', e.jobId); return `<tr class="clickable" data-act="editExpense" data-id="${e.id}"><td>${fmtDate(e.date)}</td>
+      <td>${esc(e.vendor || '—')} ${e.receipt || e.receiptImg ? `<span title="Receipt attached">${icon('receipt', 'muted').replace('<svg', '<svg style="width:14px;height:14px;vertical-align:-2px"')}</span>` : ''}<div class="muted small">${esc(e.notes || '')}</div></td>
       <td><span class="badge">${esc(e.category)}</span></td><td class="hide-sm">${j ? esc(j.title) : ''}</td><td class="num">${money(e.amount)}</td></tr>`; }).join('')}
-  </tbody></table></div>` : empty('expense', 'No expenses for this period.', btn('Add expense', 'newExpense', 'btn-sm'))}</div>`;
+  </tbody></table></div>${paged(list, 'expenses').more}` : empty('expense', 'No expenses for this period.', btn('Add expense', 'newExpense', 'btn-sm'))}</div>`;
 };
 
 /* ---------- Reports ---------- */
@@ -3091,6 +3199,9 @@ VIEWS.settings = () => {
     <p class="muted small">Everything is saved privately in this browser on this device (${used} MB used). <b>Download a backup regularly</b>, and use Restore to move your data to another phone or computer.
     ${s.lastBackup ? `Last backup: ${fmtDate(s.lastBackup)}.` : '<b style="color:var(--warn)">You haven’t made a backup yet.</b>'}</p>
     <div class="row">${btn('Download backup', 'exportBackup', 'btn-primary', '', 'download')}${btn('Restore from backup', 'importBackup')}</div>
+    <h3 style="margin:20px 0 6px">Automatic daily copies</h3>
+    <p class="muted small" style="margin-top:0">The app keeps a copy of your data from each of the last 7 days on this device. If something goes wrong, roll back to one of them. Photos are kept separately and aren’t affected.</p>
+    <div class="js-snapshots"><span class="muted small">Loading…</span></div>
     <h3 style="margin:20px 0 6px">Try it out</h3><p class="muted small" style="margin-top:0">Fill the app with example customers, jobs and invoices.</p>
     <div class="row">${btn('Load sample data', 'loadSample')}${btn('Erase everything', 'eraseAll', 'btn-danger')}</div></div>
   </div></div>`;
@@ -3110,6 +3221,14 @@ document.addEventListener('click', e => {
     row.remove();
   }
 });
+VIEWS.settings.mount = () => {
+  listSnapshots().then(list => {
+    const box = $('.js-snapshots'); if (!box) return;
+    box.innerHTML = list.length ? list.map(x => `<div class="list-item"><div class="grow"><div class="title">${x.date === today() ? 'Today' : fmtDateShort(x.date)}</div>
+      <div class="muted small">${x.customers} customers · ${x.jobs} jobs · ${x.invoices} invoices</div></div>${btn('Restore', 'restoreSnap', 'btn-sm', `data-k="${x.key}"`)}</div>`).join('')
+      : '<p class="muted small">No copies yet. The first one is made the next time the app opens.</p>';
+  });
+};
 document.addEventListener('click', e => {
   if (e.target.closest('.js-show-token')) { const i = $('#settingsForm [name=stripeToken]'); i.type = i.type === 'password' ? 'text' : 'password'; e.target.textContent = i.type === 'password' ? 'Show' : 'Hide'; }
   if (e.target.closest('.js-gen-token')) {
@@ -3373,7 +3492,7 @@ function docForm(type, d, preset = {}) {
 
 function expenseForm(e, preset = {}) {
   const isNew = !e; e ||= { date: today(), category: db.categories[0], method: 'Debit', ...preset };
-  let receipt = e.receipt || '';
+  let receipt = e.receipt ? { src: e.receipt } : e.receiptImg ? { img: e.receiptImg } : null;
   const jobs = db.jobs.filter(j => j.status !== 'cancelled').sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 200);
   modal({ title: isNew ? 'Add expense' : 'Edit expense', body: `<div class="form-grid">
     ${field('Amount (total paid) *', inp('amount', e.amount, 'type="number" step="0.01" min="0" required inputmode="decimal"'))}
@@ -3386,23 +3505,24 @@ function expenseForm(e, preset = {}) {
     ${field('Notes', `<textarea name="notes" rows="2">${esc(e.notes)}</textarea>`, 'full')}
     ${e.recurFrom ? '' : `<label class="check full"><input type="checkbox" name="recurring" ${e.recurring ? 'checked' : ''}> Repeats every month (adds it automatically, e.g. insurance, phone, software)</label>`}
     <div class="field full"><label>Receipt photo</label><input type="file" accept="image/*" capture="environment" class="js-receipt">
-      <div class="js-receipt-prev" style="margin-top:6px">${receipt ? `<img src="${receipt}" style="max-height:160px;border-radius:8px"><br><button type="button" class="btn btn-sm js-rm-receipt">Remove photo</button>` : ''}</div></div>
+      <div class="js-receipt-prev" style="margin-top:6px">${receipt ? `<img ${imgAttr(receipt)} alt="Receipt" style="max-height:160px;border-radius:8px"><br><button type="button" class="btn btn-sm js-rm-receipt">Remove photo</button>` : ''}</div></div>
   </div>`, footExtra: isNew ? '' : `<button type="button" class="btn btn-danger js-del">Delete</button>`,
     onMount: (f, close) => {
       $('.js-calc-tax', f).addEventListener('click', () => { const r = +db.settings.taxRate; f.tax.value = round2((+f.amount.value || 0) * r / (100 + r)).toFixed(2); });
       const prev = $('.js-receipt-prev', f);
       $('.js-receipt', f).addEventListener('change', async ev => {
         const file = ev.target.files[0]; if (!file) return;
-        try { receipt = await readImage(file, 1100, 0.6); prev.innerHTML = `<img src="${receipt}" style="max-height:160px;border-radius:8px">`; }
+        try { const data = await readImage(file, 1100, 0.6); receipt = await putImage(data); prev.innerHTML = `<img src="${data}" alt="Receipt" style="max-height:160px;border-radius:8px">`; }
         catch { toast('Could not read that image'); }
       });
-      prev.addEventListener('click', ev => { if (ev.target.closest('.js-rm-receipt')) { receipt = ''; prev.innerHTML = ''; } });
+      hydrateImages(prev);
+      prev.addEventListener('click', ev => { if (ev.target.closest('.js-rm-receipt')) { receipt = null; prev.innerHTML = ''; } });
       $('.js-del', f)?.addEventListener('click', () => { const snap = snapshot(); db.expenses = db.expenses.filter(x => x.id !== e.id); close(); refresh(); undoToast(snap, 'Expense deleted'); });
     },
     onSubmit: (f, d) => {
       const wasRecurring = e.recurring;
       Object.assign(e, { amount: round2(d.amount), date: d.date, vendor: d.vendor.trim(), category: d.category, tax: d.tax === '' ? 0 : round2(d.tax),
-        method: d.method, jobId: d.jobId, notes: d.notes, receipt, recurring: !!d.recurring });
+        method: d.method, jobId: d.jobId, notes: d.notes, receipt: receipt?.src || '', receiptImg: receipt?.img || '', recurring: !!d.recurring });
       if (e.recurring && !wasRecurring) e.recurNext = addMonths(e.date, 1);
       if (!e.recurring) e.recurNext = '';
       if (isNew) { e.id = uid(); db.expenses.push(e); }
@@ -3538,10 +3658,10 @@ function taskForm(x, preset = {}) {
 
 function photoViewer(j, pid) {
   const ph = (j.photos || []).find(p => p.id === pid); if (!ph) return;
-  modal({ title: `Photo · ${fmtDate(ph.date)}`, wide: true, noFoot: true, body: `<img src="${ph.src}" alt="" style="width:100%;border-radius:8px">
-    <div class="row" style="margin-top:12px"><a class="btn btn-sm" href="${ph.src}" download="job-photo-${ph.date}.jpg">${icon('download')}Save</a>
+  modal({ title: `Photo · ${fmtDate(ph.date)}`, wide: true, noFoot: true, body: `<img ${imgAttr(ph)} alt="" style="width:100%;border-radius:8px">
+    <div class="row" style="margin-top:12px"><a class="btn btn-sm" ${ph.src ? `href="${ph.src}"` : `href="#" data-img-href="${ph.img}"`} download="job-photo-${ph.date}.jpg">${icon('download')}Save</a>
     <button type="button" class="btn btn-sm btn-danger js-del">${icon('trash')}Delete photo</button></div>`,
-    onMount: (f, close) => $('.js-del', f).addEventListener('click', () => { const snap = snapshot(); j.photos = j.photos.filter(p => p.id !== pid); close(); refresh(); undoToast(snap, 'Photo deleted'); }) });
+    onMount: (f, close) => { hydrateImages(f); $('.js-del', f).addEventListener('click', () => { const snap = snapshot(); j.photos = j.photos.filter(p => p.id !== pid); close(); refresh(); undoToast(snap, 'Photo deleted'); }); } });
 }
 
 function openSearch() {
@@ -3583,7 +3703,7 @@ function processRecurring() {
     if (!e.recurring || !e.recurNext) continue;
     let guard = 0;
     while (e.recurNext <= t && guard++ < 60) {
-      db.expenses.push({ ...e, id: uid(), date: e.recurNext, receipt: '', recurring: false, recurNext: '', recurFrom: e.id });
+      db.expenses.push({ ...e, id: uid(), date: e.recurNext, receipt: '', receiptImg: '', recurring: false, recurNext: '', recurFrom: e.id });
       e.recurNext = addMonths(e.recurNext, 1); n++;
     }
   }
@@ -3635,14 +3755,16 @@ const ACTIONS = {
   newCustomer: () => customerForm(),
   editCustomer: ds => customerForm(cust(ds.id)),
   deleteCustomer: ds => {
-    const n = db.jobs.filter(j => j.customerId === ds.id).length + db.invoices.filter(i => i.customerId === ds.id).length + db.quotes.filter(q => q.customerId === ds.id).length;
-    if (n) return alert('This customer has jobs, quotes or invoices. Delete those first, so your records stay complete.');
+    const n = db.jobs.filter(j => j.customerId === ds.id).length + db.invoices.filter(i => i.customerId === ds.id).length + db.quotes.filter(q => q.customerId === ds.id).length
+      + db.subscriptions.filter(x => x.customerId === ds.id).length;
+    if (n) return alert('This customer has jobs, quotes, invoices or service plans. Delete those first, so your records stay complete.');
     if (!confirm('Delete this customer?')) return;
     const snap = snapshot();
     db.customers = db.customers.filter(c => c.id !== ds.id);
     db.leads.forEach(l => { if (l.customerId === ds.id) l.customerId = ''; });
     db.tasks.forEach(t => { if (t.customerId === ds.id) t.customerId = ''; });
     db.incomes.forEach(t => { if (t.customerId === ds.id) t.customerId = ''; });
+    db.pins.forEach(t => { if (t.customerId === ds.id) t.customerId = ''; });
     save(); go('#/customers'); undoToast(snap, 'Customer deleted');
   },
   importCustomers: () => modal({ title: 'Import customers from CSV', submitLabel: 'Import', body: `<p class="muted small">Upload a CSV with a header row. Columns named <b>name</b>, <b>email</b>, <b>phone</b>, <b>address</b> and <b>notes</b> are recognised (e.g. an export from Homebase, Jobber, or your phone contacts).</p><input type="file" accept=".csv,text/csv" name="file" required>`,
@@ -3652,13 +3774,15 @@ const ACTIONS = {
         const rows = parseCSV(txt); const hdr = (rows.shift() || []).map(h => h.toLowerCase().trim());
         const col = (...names) => hdr.findIndex(h => names.some(n => h === n || h.includes(n)));
         const ci = { name: col('name', 'customer'), first: col('first'), last: col('last'), email: col('email'), phone: col('phone', 'mobile'), address: col('address', 'street'), notes: col('note') };
-        let n = 0;
+        let n = 0, skipped = 0;
         for (const r of rows) {
           const name = (ci.first >= 0 && ci.last >= 0 ? `${r[ci.first] || ''} ${r[ci.last] || ''}` : r[ci.name] || '').trim();
           if (!name) continue;
-          db.customers.push({ id: uid(), createdAt: today(), name, email: r[ci.email] || '', phone: r[ci.phone] || '', address: r[ci.address] || '', notes: r[ci.notes] || '' }); n++;
+          const phone = formatPhone(r[ci.phone] || ''), email = (r[ci.email] || '').trim(), digits = x => String(x || '').replace(/\D/g, '').slice(-10);
+          if (db.customers.some(c => (phone && digits(c.phone) && digits(c.phone) === digits(phone)) || (email && (c.email || '').toLowerCase() === email.toLowerCase()))) { skipped++; continue; }
+          db.customers.push({ id: uid(), createdAt: today(), name, email, phone, address: r[ci.address] || '', notes: r[ci.notes] || '' }); n++;
         }
-        refresh(); toast(`Imported ${n} customers`);
+        refresh(); toast(`Imported ${n} customer${n === 1 ? '' : 's'}${skipped ? ` · ${skipped} already saved, skipped` : ''}`);
       });
     } }),
   newJob: ds => jobForm(null, { date: ds.date || today(), customerId: ds.cust, repeat: ds.repeat }),
@@ -3707,6 +3831,7 @@ const ACTIONS = {
     drawPins();
   },
   showDue: () => showDueList(),
+  showMore: ds => { (state.limits ||= {})[ds.k] = (state.limits[ds.k] || 100) + 200; render(); },
   statPeriod: ds => { const f = (state.filters.canvassStats ||= {}); f.period = ds.v; f.offset = 0; render(); },
   statMove: ds => { const f = (state.filters.canvassStats ||= {}); f.offset = Math.min(0, (+f.offset || 0) + +ds.n); render(); },
   newPlan: ds => planForm(null, { customerId: ds.cust }), editPlan: ds => planForm(byId('subscriptions', ds.id)),
@@ -3832,6 +3957,7 @@ const ACTIONS = {
   openSearch: () => openSearch(),
   hideSetup: () => { db.settings.hideSetup = true; refresh(); },
   hideInstall: () => { db.settings.hideInstall = true; refresh(); },
+  quickSetup: () => quickSetupForm(),
   newLead: () => leadForm(), editLead: ds => leadForm(byId('leads', ds.id)),
   toggleClosedLeads: () => { state.filters.leads ||= {}; state.filters.leads.closed = state.filters.leads.closed === '1' ? '' : '1'; render(); },
   newTask: ds => taskForm(null, ds.cust ? { customerId: ds.cust } : {}), editTask: ds => taskForm(byId('tasks', ds.id)),
@@ -3936,7 +4062,9 @@ const ACTIONS = {
   exportMileage: () => { const v = location.hash.includes('reports') ? 'reports' : 'expenses'; const [f, t] = periodRange(filt(v, 'period', v === 'reports' ? 'ytd' : 'this_month'), state.filters[v]);
     download('mileage.csv', csv([['Date', 'Distance (' + db.settings.distanceUnit + ')', 'Purpose', 'Route'], ...db.mileage.filter(m => inRange(m.date, f, t)).map(m => [m.date, m.distance, m.purpose, m.route])])); },
   exportBackup: async () => {
-    const name = `business-hub-backup-${today()}.json`, data = JSON.stringify({ ...db, settings: { ...db.settings, stripeToken: '' } });
+    const images = {};
+    for (const id of imageIds(db)) { const v = await getImage(id); if (v) images[id] = v; }
+    const name = `business-hub-backup-${today()}.json`, data = JSON.stringify({ ...db, settings: { ...db.settings, stripeToken: '' }, images });
     db.settings.lastBackup = today(); save();
     const file = typeof File === 'function' ? new File([data], name, { type: 'application/json' }) : null;
     // On phones, the share sheet lets you save straight to Files, Google Drive or email.
@@ -3947,8 +4075,22 @@ const ACTIONS = {
   },
   importBackup: () => modal({ title: 'Restore from backup', submitLabel: 'Restore', body: '<p class="muted">This replaces all data in this browser with the backup file.</p><input type="file" accept=".json,application/json" name="file" required>',
     onSubmit: f => { const file = f.file.files[0]; if (!file) return false;
-      file.text().then(t => { try { const d = JSON.parse(t); if (!d.settings || !Array.isArray(d.invoices)) throw 0; db = normalize(d); refresh(); go('#/dashboard'); toast('Backup restored'); } catch { alert('That file is not a valid backup.'); } }); } }),
-  eraseAll: () => { if (confirm('Erase ALL data in this browser? Download a backup first if you might need it.') && confirm('Are you absolutely sure?')) { const s = db.settings; db = blank(); if (confirm('Keep your business settings (name, logo, tax)?')) db.settings = s; refresh(); go('#/dashboard'); } },
+      file.text().then(async t => {
+        let d; try { d = JSON.parse(t); if (!d.settings || !Array.isArray(d.invoices)) throw 0; } catch { return alert('That file is not a valid backup.'); }
+        const { images = {}, ...rest } = d, keep = { stripeToken: db.settings.stripeToken, meId: db.settings.meId };
+        if (storageMode === 'idb') { for (const [id, v] of Object.entries(images)) { await idb.set('img:' + id, v); imgCache.set(id, v); } }
+        else rest.jobs?.forEach(j => (j.photos || []).forEach(ph => { if (ph.img && images[ph.img]) { ph.src = images[ph.img]; delete ph.img; } }));
+        db = normalize(rest);
+        if (!db.settings.stripeToken && keep.stripeToken) db.settings.stripeToken = keep.stripeToken;
+        refresh(); go('#/dashboard'); toast('Backup restored');
+      }); } }),
+  eraseAll: async () => {
+    if (!(confirm('Erase ALL data in this browser? Download a backup first if you might need it.') && confirm('Are you absolutely sure?'))) return;
+    await takeSnapshot(true); // today's copy, so this can be undone from Settings → Data
+    const s = db.settings; db = blank(); if (confirm('Keep your business settings (name, logo, tax)?')) db.settings = s;
+    refresh(); go('#/dashboard'); toast('Erased. Changed your mind? Settings → Data & backup → Automatic daily copies.');
+  },
+  restoreSnap: async ds => { if (confirm(`Replace your current data with the copy from ${fmtDate(ds.k.slice(5))}?`)) await restoreSnapshot(ds.k); },
   loadSample: () => { if ((db.customers.length || db.invoices.length) && !confirm('Add sample data alongside your existing data?')) return; loadSample(); refresh(); toast('Sample data loaded'); },
 };
 
@@ -4033,7 +4175,7 @@ document.addEventListener('change', async e => {
   const files = [...e.target.files]; if (!files.length) return;
   toast(`Adding ${files.length} photo${files.length > 1 ? 's' : ''}…`);
   for (const file of files) {
-    try { (j.photos ||= []).push({ id: uid(), date: today(), src: await readImage(file, 1400, 0.7) }); }
+    try { (j.photos ||= []).push({ id: uid(), date: today(), ...(await putImage(await readImage(file, 1400, 0.7))) }); }
     catch { toast('Could not read one of the photos'); }
   }
   refresh(); toast('Photos saved');
@@ -4199,12 +4341,14 @@ new MutationObserver(() => document.body.classList.toggle('modal-open', $('#moda
 if (navigator.standalone || matchMedia('(display-mode: standalone)').matches) document.documentElement.classList.add('standalone');
 try { Object.assign(state, JSON.parse(localStorage.getItem('bizhub.ui') || '{}')); } catch { /* ignore */ }
 state.calDay = today(); state.calMonth = today().slice(0, 7); state.tsWeek = '';
-window.addEventListener('pagehide', () => { try { localStorage.setItem('bizhub.ui', JSON.stringify({ calView: state.calView, calTeam: state.calTeam, filters: state.filters, mapStyle: state.mapStyle })); } catch { /* ignore */ } });
+window.addEventListener('pagehide', () => { try { localStorage.setItem('bizhub.ui', JSON.stringify({ calView: state.calView, calTeam: state.calTeam, filters: state.filters, mapStyle: state.mapStyle, mapView: state.mapView })); } catch { /* ignore */ } });
 load().then(d => {
   db = d; state.loaded = true;
   processRecurring();
   processPlans();
   render();
+  migrateImages().then(() => hydrateImages($('#main')));
+  takeSnapshot();
   if (storageMode === 'local') toast('Private browsing detected: data may not be kept. Download backups often.');
 });
 navigator.storage?.persist?.().catch(() => {}); // ask the browser not to clear our data

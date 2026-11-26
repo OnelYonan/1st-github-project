@@ -673,26 +673,16 @@ a.card.stat:hover { border-color: var(--primary); }
 }
 
 /* ============ v5: door knocking ============ */
-.canvass-card { padding-bottom: 12px; }
-.canvass-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
 .chip-btn {
   display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px 5px 7px; border-radius: 999px; border: 1px solid var(--border);
   background: var(--surface); color: var(--text-2); font: inherit; font-size: .82rem; font-weight: 600; cursor: pointer;
 }
 .chip-btn:first-child { padding-left: 11px; }
 .chip-btn.active { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
-.map-wrap { position: relative; }
-.map { height: calc(100vh - 290px); min-height: 380px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); position: relative; z-index: 0; isolation: isolate; background: var(--surface-2); }
-.map .empty { padding-top: 120px; }
-.map-tools { position: absolute; right: 12px; bottom: 30px; z-index: 5; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-.map-btn { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--primary); display: grid; place-items: center; box-shadow: var(--shadow); cursor: pointer; }
-.map-btn svg { width: 20px; height: 20px; }
 .map-pin-btn { box-shadow: 0 6px 18px rgba(0,0,0,.25); padding: 12px 16px; }
-.map-hint { position: absolute; left: 50%; top: 10px; transform: translateX(-50%); z-index: 5; background: rgba(15,23,42,.75); color: #fff; font-size: .78rem; padding: 4px 10px; border-radius: 999px; pointer-events: none; white-space: nowrap; }
 .knock-pin { background: none; border: none; }
 .knock-pin svg { filter: drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
 .leaflet-container { font: inherit; }
-.due-list { margin-top: 12px; }
 .knock-picker { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
 .knock-opt { position: relative; }
 .knock-opt input { position: absolute; opacity: 0; inset: 0; cursor: pointer; }
@@ -710,11 +700,9 @@ a.card.stat:hover { border-color: var(--primary); }
 .knock-mini b { font-size: 1.4rem; font-variant-numeric: tabular-nums; }
 @media (max-width: 1000px) { .knock-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
-  .map { height: calc(100vh - 330px); min-height: 340px; }
   .knock-picker { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .map-pin-btn { padding: 12px 14px; }
 }
-.map-hint { left: 58px; right: 10px; transform: none; text-align: center; white-space: normal; width: max-content; max-width: calc(100% - 68px); margin: 0 auto; }
 .sign-head .right { text-align: right; }
 @media (max-width: 760px) { .sign-head .right { text-align: left; } }
 
@@ -728,12 +716,6 @@ a.card.stat:hover { border-color: var(--primary); }
 .addon-sum { margin-top: 10px; font-size: .9rem; }
 .addon-sum:empty { display: none; }
 .addon-tag { display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #047857; background: #d1fae5; border-radius: 4px; padding: 1px 5px; vertical-align: 1px; }
-.map-style-btn {
-  position: absolute; top: 10px; right: 10px; z-index: 6; display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 8px;
-  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-size: .82rem; font-weight: 700; box-shadow: var(--shadow); cursor: pointer;
-}
-.map-style-btn svg { width: 16px; height: 16px; color: var(--primary); }
-.map-hint { right: 118px; max-width: calc(100% - 176px); }
 @media (max-width: 760px) {
   .addon-row { grid-template-columns: minmax(0, 1fr) 110px auto; }
   .addon-row select { grid-column: 1 / 3; grid-row: 2; }
@@ -892,7 +874,6 @@ a, button, .btn, input, select, textarea, label { touch-action: manipulation; }
   .kanban { scroll-snap-type: x mandatory; margin: 0 -16px; padding: 0 16px 8px; scroll-padding: 16px; }
   .kanban-col { scroll-snap-align: start; }
   .settings-nav { margin: 0 -16px; padding: 0 16px 6px; scrollbar-width: none; }
-  .map { height: calc(100dvh - 330px - env(safe-area-inset-bottom)); }
   .toast { bottom: calc(80px + env(safe-area-inset-bottom)); max-width: calc(100% - 32px); }
   .cal-head { gap: 8px; }
   .cal-head .row { flex: 1; justify-content: space-between; }
@@ -1008,3 +989,4 @@ body.map-mode .main { padding: 0; max-width: none; }
   .half-sheet { justify-content: flex-end; align-items: flex-start; padding: 16px; background: transparent; pointer-events: none; }
   .half-sheet .modal { pointer-events: auto; width: 400px; max-height: calc(100vh - 32px); overflow-y: auto; }
 }
+.show-more { display: flex; justify-content: center; padding: 12px 0 4px; }

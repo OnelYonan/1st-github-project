@@ -14,6 +14,7 @@ const fail = msg => { app.innerHTML = `<div class="card sign-card"><h1>Something
   let a;
   try { a = await BH.unpack(raw); } catch (e) { return fail(e.message || 'This link could not be read. It may have been cut off.'); }
   document.title = `Service Agreement ${a.n} · ${a.b.name}`;
+  if (a.cs && !/^https:\/\//i.test(a.cs)) a.cs = ''; // only secure web links
   const lines = (a.p.items || []).map(([d, q, p]) => `<tr><td>${esc(d)}</td><td class="num">${esc(q)}</td><td class="num">${esc(p)}</td></tr>`).join('');
   app.innerHTML = `
   <article class="card sign-card doc-like">
