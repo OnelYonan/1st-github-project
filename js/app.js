@@ -779,6 +779,10 @@ VIEWS.dashboard = () => {
       <div class="progress" style="margin-bottom:10px"><i style="width:${(4 - setupLeft) * 25}%"></i></div>
       ${setupSteps.map(([done, label, href]) => `<a class="setup-step ${done ? 'done' : ''}" href="${href}">${icon(done ? 'check' : 'plus')}<span>${label}</span></a>`).join('')}</div>` : '');
 
+  // money paid to employees this month: wage/commission payouts recorded as expenses
+  const wages = db.expenses.filter(x => inRange(x.date, m0, m1) && (x.isCommission || x.category === 'Wages & Payroll'));
+  const teamPaid = sum(wages, x => x.amount), teamOwed = commissionsOwed(m0, m1);
+  const paidBy = Object.entries(wages.reduce((o, x) => { const k = x.vendor || 'Other'; o[k] = (o[k] || 0) + +x.amount; return o; }, {})).sort((a, b) => b[1] - a[1]);
   const knockDue = comebacksDue();
   const readyToCharge = stripeOn() ? open.filter(i => stripeCard(i.customerId)) : [];
   const kt = knockStats(t, t, ''), kw = knockStats(addDays(t, -parseD(t).getDay()), t, '');
@@ -821,12 +825,14 @@ VIEWS.dashboard = () => {
     `<div class="row hide-sm">${btn('Job', 'newJob', '', '', 'plus')}${btn('Quote', 'newQuote', '', '', 'plus')}${btn('Invoice', 'newInvoice', 'btn-primary', '', 'plus')}</div>`,
     `${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}${todayCount ? ` · ${plural(todayCount, 'job')} today` : ''}`) + welcome + `
   <div class="quick-actions show-sm">${btn('Job', 'newJob', '', '', 'calendar')}${btn('Quote', 'newQuote', '', '', 'quote')}${btn('Invoice', 'newInvoice', '', '', 'invoice')}${btn('Expense', 'newExpense', '', '', 'expense')}</div>
-  <div class="grid grid-4">
+  <div class="grid grid-5 dash-stats">
     <a class="card stat" href="#/income" style="color:inherit"><div class="label">Income this month</div><div class="value">${money(inc)}</div>
       ${goal ? `<div class="progress" title="${goalPct}% of goal"><i style="width:${goalPct}%"></i></div><div class="sub">${goalPct}% of ${money(goal)} goal</div>`
         : `<div class="sub">${delta === null ? 'Payments received' : `${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta)}% vs last month`}</div>`}</a>
     <a class="card stat" href="#/expenses" style="color:inherit"><div class="label">Expenses this month</div><div class="value">${money(exp)}</div><div class="sub">${commissionsOwed(m0, m1) ? `incl. ${money(commissionsOwed(m0, m1))} commissions owed` : plural(db.expenses.filter(x => inRange(x.date, m0, m1)).length, 'expense')}</div></a>
     <a class="card stat" href="#/reports" style="color:inherit"><div class="label">Profit this month</div><div class="value" style="color:${inc - exp < 0 ? 'var(--bad)' : 'inherit'}">${money(inc - exp)}</div><div class="sub">${inc ? Math.round((inc - exp) / inc * 100) + '% margin' : '—'}</div></a>
+    <a class="card stat" href="#/team" data-tabset="team:tab:pay" style="color:inherit"><div class="label">Paid to team this month</div><div class="value">${money(teamPaid)}</div>
+      <div class="sub">${teamOwed ? `<span style="color:var(--warn)">${money(teamOwed)} still owed</span>` : paidBy.length ? paidBy.slice(0, 2).map(([n, v]) => `${esc(n)} ${money(v)}`).join(' · ') : 'No payouts yet'}</div></a>
     <a class="card stat" href="#/invoices" style="color:inherit"><div class="label">Owed to you</div><div class="value">${money(ar)}</div><div class="sub">${open.length} open · <span style="color:${overdue.length ? 'var(--bad)' : 'inherit'}">${overdue.length} overdue</span></div></a>
   </div>
   ${attn.length ? `<div class="card show-sm" style="margin-top:16px"><div class="card-head"><h2>Needs attention</h2></div><div class="attn">${attnHTML}</div></div>` : ''}
