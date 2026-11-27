@@ -1225,9 +1225,12 @@ async function pairSheet(first = false) {
       <button type="button" class="btn ${s.email ? '' : 'btn-primary'} js-copy">${icon('share')}Copy link</button>
     </div>
     <div class="qr-box js-qr"></div>
-    <p class="muted small">On a phone, you can also scan the code with the camera. <b>Keep this link private</b>: anyone who has it can open your business data.</p>`,
+    <p class="muted small">On a phone, you can also scan the code with the camera. <b>Keep this link private</b>: anyone who has it can open your business data.</p>
+    <p class="muted small"><b>It’s also your recovery key.</b> If you ever lose all your devices, open this link on a new one and everything comes back. Emailing it to yourself is the easiest way to keep it safe.</p>`,
     onMount: f => {
-      $('.js-copy', f).addEventListener('click', async () => { try { await navigator.clipboard.writeText(link); toast('Link copied. Open it on your other device.'); } catch { prompt('Copy this link:', link); } });
+      const saved = () => { if (syncCfg()) { syncCfg().recoverySaved = true; quietSave(); } };
+      $('.js-raw', f)?.addEventListener('click', saved);
+      $('.js-copy', f).addEventListener('click', async () => { saved(); try { await navigator.clipboard.writeText(link); toast('Link copied. Open it on your other device.'); } catch { prompt('Copy this link:', link); } });
       loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js').then(() => {
         const qr = window.qrcode(0, 'L'); qr.addData(link); qr.make(); $('.js-qr', f).innerHTML = qr.createSvgTag({ cellSize: 3, margin: 2, scalable: true });
       }).catch(() => {});
@@ -1252,6 +1255,67 @@ async function receivePair(data) {
         render();
       })();
     } });
+}
+/** Earlier versions of your synced data (GitHub keeps every one). */
+async function cloudHistory() {
+  const cfg = syncCfg();
+  const list = await gh(`/gists/${cfg.gist}/commits?per_page=100`);
+  // one entry per hour is plenty; photo-only uploads look the same, so keep the latest per hour
+  const seen = new Set(), out = [];
+  for (const c of list) { const h = c.committed_at.slice(0, 13); if (seen.has(h)) continue; seen.add(h); out.push(c); }
+  return out;
+}
+async function cloudVersion(version) {
+  const cfg = syncCfg(), g = await gh(`/gists/${cfg.gist}/${version}`), f = g.files?.[SYNC_FILE];
+  if (!f) throw new Error('That version has no data');
+  const txt = f.truncated ? await (await fetch(f.raw_url, { cache: 'no-store' })).text() : f.content;
+  return (await BH.openSealed(txt.trim(), cfg.key)).db;
+}
+async function cloudHistorySheet() {
+  if (!syncOn()) return toast('Turn on sync first');
+  const m = modal({ title: 'Restore from cloud history', noFoot: true, focus: false, body: '<p class="muted small" style="margin-top:0">Every time your devices sync, GitHub keeps a copy. Pick a point in time to see what was there, and bring it back if you need to.</p><div class="js-hist"><p class="muted">Loading…</p></div>' });
+  let list;
+  try { list = await cloudHistory(); } catch (e) { $('.js-hist', m.form).innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; return; }
+  const box = $('.js-hist', m.form);
+  box.innerHTML = list.map((c, i) => `<button type="button" class="list-item js-ver" data-v="${esc(c.version)}" style="width:100%;background:none;border:none;font:inherit;text-align:left;cursor:pointer;color:inherit">
+    <span class="attn-ic info">${icon('clock')}</span><div class="grow"><div class="title">${esc(new Date(c.committed_at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</div>
+    <div class="muted small js-sum">${i === 0 ? 'Latest' : 'Tap to see what was there'}</div></div></button>`).join('') || '<p class="muted">No history yet.</p>';
+  box.addEventListener('click', async e => {
+    const b = e.target.closest('.js-ver'); if (!b) return;
+    const sum = $('.js-sum', b); sum.textContent = 'Opening…';
+    try {
+      const d = await cloudVersion(b.dataset.v);
+      const n = k => (d[k] || []).length;
+      sum.innerHTML = `${n('customers')} customers · ${n('jobs')} jobs · ${n('quotes')} quotes · ${n('invoices')} invoices · <b style="color:var(--primary)">Restore this</b>`;
+      if (b.dataset.ready) {
+        if (!confirm(`Go back to how everything was on ${b.querySelector('.title').textContent}? All your devices switch to this version. (Today’s data is kept in Settings → Data & backup → daily copies.)`)) return;
+        await takeSnapshot(true);
+        await idb.set('snap:before-restore', JSON.stringify(db)).catch(() => {});
+        const keep = Object.fromEntries(DEVICE_ONLY.map(k => [k, db.settings[k]]));
+        db = normalize({ ...d, settings: { ...d.settings, ...keep } });
+        // stamp everything so this version wins on every device
+        const now = Date.now(); for (const v of Object.values(db)) if (Array.isArray(v)) v.forEach(x => { if (x && typeof x === 'object' && x.id) x._u = now; });
+        save(); m.close(); go('#/dashboard'); render(); toast('Restored. Your other devices update on their next sync.');
+        setTimeout(() => syncNow(true), 400); // after the sheet has closed
+      }
+      b.dataset.ready = '1';
+    } catch (err) { sum.textContent = err.message; }
+  });
+}
+/** What protects your data right now, as a checklist. */
+async function dataSafetyHTML() {
+  const s = db.settings, t = today();
+  const persisted = await navigator.storage?.persisted?.().catch(() => false);
+  const snaps = (await listSnapshots()).length;
+  const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+  const rows = [
+    [syncOn() && !syncCfg().error, 'Encrypted copy in your cloud', syncOn() ? (syncCfg().lastSync ? `Last synced ${fmtDate(localDate(new Date(syncCfg().lastSync).toISOString()))}` : 'Connected') + (syncCfg().error ? ` · problem: ${esc(syncCfg().error)}` : '') : 'Off: your data is only on this device. Turn on sync below.'],
+    [syncOn() && syncCfg().recoverySaved, 'Recovery link saved somewhere safe', syncOn() ? (syncCfg().recoverySaved ? 'You can rebuild everything on a new phone' : 'Email the link to yourself (Connect another device) so a lost phone can’t lock you out') : 'Comes with sync'],
+    [snaps > 0, 'Daily copies on this device', `${snaps} of the last 7 days`],
+    [s.lastBackup && daysBetween(s.lastBackup, t) < 30, 'Backup file downloaded', s.lastBackup ? `Last one ${fmtDate(s.lastBackup)}` : 'Never. Download one now and then.'],
+    [!!(persisted || standalone), 'Protected from automatic clean-up', standalone ? 'Installed on your Home Screen' : persisted ? 'The browser promised to keep it' : 'Add the app to your Home Screen (Share → Add to Home Screen)'],
+  ];
+  return rows.map(([ok, title, sub]) => `<div class="safety-row"><span class="safety-ic ${ok ? 'ok' : 'no'}">${ok ? '✓' : '!'}</span><div class="grow"><b>${title}</b><div class="muted small">${sub}</div></div></div>`).join('');
 }
 function syncOff() {
   if (!confirm('Stop syncing on this device? Your data stays here and on your other devices.')) return;
@@ -1346,6 +1410,8 @@ VIEWS.dashboard = () => {
     endingPlans.length && ['warn', 'repeat', `${plural(endingPlans.length, 'plan')} ending soon`, 'Renew before the last visit', `#/plans/${endingPlans[0].id}`],
     readyToCharge.length && ['info', 'expense', `${plural(readyToCharge.length, 'invoice')} ready to charge`, 'Unpaid, with a Stripe card on file', '#/invoices', 'invoices:tab:unpaid'],
     knockDue.length && ['warn', 'clock', `${plural(knockDue.length, 'come-back')} due`, 'Houses that asked you to come back', '#/canvass'],
+    hasData && !syncOn() && ['warn', 'repeat', 'Your data is only on this device', 'Turn on sync: it keeps an encrypted copy in your cloud and on your computer', '', '', 'syncSetup'],
+    syncOn() && !syncCfg().recoverySaved && hasData && ['info', 'share', 'Save your recovery link', 'Email it to yourself so a lost phone can’t lock you out', '', '', 'syncPair'],
     needsBackup && ['warn', 'download', 'Back up your data', s.lastBackup ? `Last backup ${fmtDate(s.lastBackup)}` : 'No backup yet. Tap to save one.', '', '', 'exportBackup'],
   ].filter(Boolean);
   const attnHTML = attn.map(([tone, ic, title, sub, href, tabset, act]) => {
@@ -4207,10 +4273,11 @@ VIEWS.settings = () => {
     ${field('One per line', `<textarea name="categories" rows="8">${esc(db.categories.join('\n'))}</textarea>`)}</div>
   <div class="row ${sec === 'data' ? 'hidden' : ''}" data-sec-save><button class="btn btn-primary" type="submit">Save settings</button></div>
   </form>
+  <div class="card ${show('data')}"><h2>Is my data safe?</h2><div class="js-safety"><span class="muted small">Checking…</span></div></div>
   <div class="card ${show('data')}"><h2>Sync your phone and computer</h2>
     ${syncOn() ? `<div class="stripe-status js-sync-state">${syncCfg().error ? `<span style="color:var(--bad)">${esc(syncCfg().error)}</span>` : `<span class="badge good">On</span> ${syncCfg().lastSync ? 'Last synced ' + esc(new Date(syncCfg().lastSync).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })) : 'Connected'}`}</div>
       <p class="muted small">Everything you add or change here shows up on your other devices within a minute (and the other way round). Encrypted with a key only your devices have.</p>
-      <div class="row">${btn('Connect another device', 'syncPair', 'btn-sm btn-primary', 'type="button"', 'share')}${btn('Sync now', 'syncNow', 'btn-sm', 'type="button"', 'repeat')}${btn('Turn off on this device', 'syncOff', 'btn-sm', 'type="button"')}</div>`
+      <div class="row">${btn('Connect another device', 'syncPair', 'btn-sm btn-primary', 'type="button"', 'share')}${btn('Sync now', 'syncNow', 'btn-sm', 'type="button"', 'repeat')}${btn('Restore from cloud history', 'cloudHistory', 'btn-sm', 'type="button"', 'clock')}${btn('Turn off on this device', 'syncOff', 'btn-sm', 'type="button"')}</div>`
     : `<p class="muted small">Right now your data lives only on this device. Turn on sync and your customers, jobs, quotes, invoices and photos show up on your phone <b>and</b> your computer, kept up to date automatically. Free, using your GitHub account, and encrypted so only your devices can read it.</p>
       <div class="row">${btn('Turn on sync', 'syncSetup', 'btn-sm btn-primary', 'type="button"', 'repeat')}</div>
       <p class="muted small" style="margin-bottom:0">Already syncing on another device? On that device tap <b>Connect another device</b> and open the link here.</p>`}</div>
@@ -4241,6 +4308,7 @@ document.addEventListener('click', e => {
   }
 });
 VIEWS.settings.mount = () => {
+  dataSafetyHTML().then(h => { const el = $('.js-safety'); if (el) el.innerHTML = h; });
   listSnapshots().then(list => {
     const box = $('.js-snapshots'); if (!box) return;
     box.innerHTML = list.length ? list.map(x => `<div class="list-item"><div class="grow"><div class="title">${x.date === today() ? 'Today' : fmtDateShort(x.date)}</div>
@@ -4999,6 +5067,7 @@ const ACTIONS = {
   syncPair: () => pairSheet(),
   syncNow: () => syncNow(true),
   syncOff: () => syncOff(),
+  cloudHistory: () => cloudHistorySheet(),
   bookingShare: () => bookingShare(),
   sendReminders: () => remindersSheet(),
   remindOverdue: () => overdueSheet(),

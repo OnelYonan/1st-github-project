@@ -1619,3 +1619,10 @@ input[type=file]::file-selector-button {
 .swipe-tray { position: absolute; top: 0; bottom: 0; display: flex; }
 .swipe-act { flex: 1; border: none; color: #fff; font: inherit; font-weight: 600; font-size: .9rem; cursor: pointer; padding: 0 6px; }
 .show-sm:has([data-swipe]) { overflow-x: clip; margin: 0 -16px; padding: 0 16px; }
+
+/* data safety checklist */
+.safety-row { display: flex; gap: 12px; align-items: flex-start; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.safety-row:last-child { border-bottom: none; }
+.safety-ic { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; flex-shrink: 0; color: #fff; }
+.safety-ic.ok { background: var(--green); }
+.safety-ic.no { background: var(--orange); }

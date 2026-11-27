@@ -96,6 +96,35 @@ const check = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${con
   await A.page.goto(URL + '#/settings'); await A.page.tap('[data-settab=data]');
   check((await A.page.textContent('.js-sync-state')).includes('Last synced'), 'Settings shows when it last synced');
 
+  // ---- disaster: customers deleted by mistake, and it syncs everywhere ----
+  const before = await A.get('d.customers.length');
+  await A.set(`d.customers = []; return 1`); await syncNow(A); await syncNow(B);
+  check(await B.get('d.customers.length') === 0, '(a mistaken delete reaches every device…)');
+  await A.page.goto(URL + '#/settings'); await A.page.waitForSelector('.page-head'); await A.page.tap('[data-settab=data]');
+  await A.page.waitForSelector('.safety-row');
+  check(await A.page.locator('.safety-row').count() === 5 && (await A.page.textContent('.js-safety')).includes('Encrypted copy in your cloud'), 'Settings shows an "Is my data safe?" checklist');
+  await A.page.tap('[data-act="cloudHistory"]'); await A.page.waitForSelector('.js-ver');
+  const vers = await A.page.locator('.js-ver').count();
+  // step back through versions (like a person would) until one still has the customers
+  let older = null;
+  for (let i = 0; i < Math.min(vers, 8) && !older; i++) {
+    const v = A.page.locator('.js-ver').nth(i);
+    await v.tap(); await A.page.waitForFunction(n => /customers|data|wrong/i.test(document.querySelectorAll('.js-ver')[n].querySelector('.js-sum').textContent) && !/Opening/.test(document.querySelectorAll('.js-ver')[n].textContent), i, { timeout: 8000 });
+    if ((await v.textContent()).includes(`${before} customers`)) older = v;
+  }
+  check(vers >= 3 && !!older, `cloud history lists earlier versions and shows what was in them (${vers} versions)`);
+  if (older) await older.tap(); await A.page.waitForTimeout(2500);
+  check(await A.get('d.customers.length') === before, '…restore from cloud history brings every customer back');
+  await A.page.waitForTimeout(1500); await syncNow(B);
+  check(await B.get('d.customers.length') === before, '…and the PC gets them back too');
+
+  // ---- lost every device: a brand-new phone + the recovery link = everything back ----
+  const C = await device({ ...devices['iPhone 14'] }, 'new phone');
+  await C.page.goto(URL); await C.page.waitForSelector('.page-head');
+  await C.page.goto(pair); await C.page.waitForSelector('.modal'); await C.page.tap('.modal .sheet-save'); await C.page.waitForTimeout(3000);
+  for (let i = 0; i < 10 && await C.get('d.customers.length') !== before; i++) await C.page.waitForTimeout(1000);
+  check(await C.get('d.customers.length') === before && await C.get(`d.pins.filter(p => p.id.startsWith('pz')).length`) === 6000, 'a brand-new phone rebuilds everything from the recovery link');
+
   // ---- turn off on the PC: data stays ----
   await B.page.goto(URL + '#/settings'); await B.page.click('[data-settab=data]'); await B.page.click('[data-act="syncOff"]'); await B.page.waitForTimeout(400);
   check(!(await B.get('d.settings.sync')) && await B.get('d.customers.length') > 0, 'turning sync off keeps the data on that device');

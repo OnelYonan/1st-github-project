@@ -25,7 +25,7 @@ const env = { STRIPE_SECRET_KEY: 'sk_test_mock', APP_TOKEN: 'test-token-123', AL
   TWILIO_ACCOUNT_SID: 'ACmock', TWILIO_AUTH_TOKEN: 'twilio-secret', TWILIO_FROM: '+14165550100', INBOX };
 const smsLog = [];
 const relay = {}; // stand-in for ntfy.sh: topic -> messages
-const gists = {}, ghLog = []; // stand-in for GitHub gists
+const gists = {}, ghLog = []; let verN = 0; // stand-in for GitHub gists (with version history)
 const PAY_BASE = 'http://localhost:8787';
 const db = { customers: {}, pms: {}, sessions: {}, pis: {}, n: 0 };
 const log = [];
@@ -83,23 +83,28 @@ http.createServer(async (req, res) => {
     const head = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, Accept', 'Content-Type': 'application/json' };
     const send = (code, obj) => { res.writeHead(code, head); res.end(typeof obj === 'string' ? obj : JSON.stringify(obj)); };
     if (req.method === 'OPTIONS') { res.writeHead(204, head); res.end(); return; }
-    if (url.pathname.startsWith('/ghraw/')) { // /ghraw/<owner>/<gist>/raw/<file>
-      const [, , , gid, , file] = url.pathname.split('/');
-      const f = gists[gid]?.files[file]; return f ? send(200, f) : send(404, 'Not Found');
+    if (url.pathname.startsWith('/ghraw/')) { // /ghraw/<owner>/<gist>/raw/[<version>/]<file>
+      const parts = url.pathname.split('/'), gid = parts[3], ver = parts.length > 6 ? parts[5] : '', file = parts.at(-1);
+      const files = ver ? gists[gid]?.history.find(h => h.version === ver)?.files : gists[gid]?.files;
+      const f = files?.[file]; return f ? send(200, f) : send(404, 'Not Found');
     }
     if (req.headers.authorization !== 'Bearer ghp_test') return send(401, { message: 'Bad credentials' });
     const chunks = []; for await (const c of req) chunks.push(c);
     const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
-    const view = g => ({ id: g.id, files: Object.fromEntries(Object.entries(g.files).map(([n, c]) => [n, { filename: n, truncated: c.length > 200000,
-      content: c.length > 200000 ? c.slice(0, 200000) : c, raw_url: `${PAY_BASE}/ghraw/tester/${g.id}/raw/${n}` }])) });
+    const view = (g, ver = '') => ({ id: g.id, files: Object.fromEntries(Object.entries(g.files).map(([n, c]) => [n, { filename: n, truncated: c.length > 200000,
+      content: c.length > 200000 ? c.slice(0, 200000) : c, raw_url: `${PAY_BASE}/ghraw/tester/${g.id}/raw/${ver ? ver + '/' : ''}${n}` }])) });
+    const snap = g => { g.history.unshift({ version: 'v' + (++verN), committed_at: new Date(Date.now() + verN * 3600e3).toISOString(), files: { ...g.files } }); };
+    const mc = url.pathname.match(/^\/gh\/gists\/(\w+)\/commits$/), mv = url.pathname.match(/^\/gh\/gists\/(\w+)\/(v\d+)$/);
+    if (mc && gists[mc[1]]) return send(200, gists[mc[1]].history.map(({ version, committed_at }) => ({ version, committed_at })));
+    if (mv && gists[mv[1]]) { const h = gists[mv[1]].history.find(x => x.version === mv[2]); return h ? send(200, view({ id: mv[1], files: h.files }, h.version)) : send(404, { message: 'Not Found' }); }
     const m = url.pathname.match(/^\/gh\/gists\/(\w+)$/);
     if (url.pathname === '/gh/user') return send(200, { login: 'tester' });
     if (url.pathname === '/gh/gists' && req.method === 'POST') {
       const g = { id: 'g' + (Object.keys(gists).length + 1), files: Object.fromEntries(Object.entries(body.files).map(([n, f]) => [n, f.content])) };
-      gists[g.id] = g; return send(201, view(g));
+      g.history = []; snap(g); gists[g.id] = g; return send(201, view(g));
     }
     if (m && gists[m[1]]) {
-      if (req.method === 'PATCH') { ghLog.push(Object.keys(body.files)); for (const [n, f] of Object.entries(body.files)) gists[m[1]].files[n] = f.content; }
+      if (req.method === 'PATCH') { ghLog.push(Object.keys(body.files)); for (const [n, f] of Object.entries(body.files)) gists[m[1]].files[n] = f.content; snap(gists[m[1]]); }
       return send(200, view(gists[m[1]]));
     }
     return send(404, { message: 'Not Found' });
