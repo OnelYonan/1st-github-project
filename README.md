@@ -58,7 +58,7 @@ A booking and business app for a home-services business (window cleaning, gutter
 - Photos and receipts are stored separately, so saving stays fast even with hundreds of photos.
 - The app keeps **automatic daily copies of the last 7 days**. Roll back from **Settings → Data & backup**.
 - **Download a backup** regularly (photos included). Use **Restore from backup** to move to a new phone. Backups never include your Stripe app token.
-- Data doesn't sync between devices on its own. That would need an online database.
+- **Sync between your phone and computer** (Settings → Data & backup → Turn on sync): uses a free private gist on your GitHub account. Data is encrypted on your device first and only your devices hold the key. Changes from every device are combined record by record, photos included. Add a device with the pairing link (email it to yourself, or scan the QR code).
 
 ## For developers
 
@@ -79,4 +79,4 @@ Run all tests (needs Node, Playwright and Python 3):
 bash tests/run-all.sh
 ```
 
-This runs the main end-to-end test, Stripe (against a fake Stripe), commissions, photos, daily copies, quote approval / texting / blasts / booking form / batch texts / map filters (against a fake Twilio and relay), a "tap every button" test on phone and desktop, and an iPhone layout audit that checks every main screen for anything off-screen.
+This runs the main end-to-end test, Stripe (against a fake Stripe), commissions, photos, daily copies, quote approval / texting / blasts / booking form / batch texts / map filters (against a fake Twilio and relay), two-device sync (against a fake GitHub), a "tap every button" test on phone and desktop, and an iPhone layout audit that checks every main screen for anything off-screen.

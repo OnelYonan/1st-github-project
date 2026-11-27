@@ -25,6 +25,8 @@ const env = { STRIPE_SECRET_KEY: 'sk_test_mock', APP_TOKEN: 'test-token-123', AL
   TWILIO_ACCOUNT_SID: 'ACmock', TWILIO_AUTH_TOKEN: 'twilio-secret', TWILIO_FROM: '+14165550100', INBOX };
 const smsLog = [];
 const relay = {}; // stand-in for ntfy.sh: topic -> messages
+const gists = {}, ghLog = []; // stand-in for GitHub gists
+const PAY_BASE = 'http://localhost:8787';
 const db = { customers: {}, pms: {}, sessions: {}, pis: {}, n: 0 };
 const log = [];
 const id = p => `${p}_${++db.n}`;
@@ -77,6 +79,31 @@ globalThis.fetch = async (url, opts = {}) => {
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost:8787');
+  if (url.pathname.startsWith('/gh/') || url.pathname.startsWith('/ghraw/')) {
+    const head = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type, Accept', 'Content-Type': 'application/json' };
+    const send = (code, obj) => { res.writeHead(code, head); res.end(typeof obj === 'string' ? obj : JSON.stringify(obj)); };
+    if (req.method === 'OPTIONS') { res.writeHead(204, head); res.end(); return; }
+    if (url.pathname.startsWith('/ghraw/')) { // /ghraw/<owner>/<gist>/raw/<file>
+      const [, , , gid, , file] = url.pathname.split('/');
+      const f = gists[gid]?.files[file]; return f ? send(200, f) : send(404, 'Not Found');
+    }
+    if (req.headers.authorization !== 'Bearer ghp_test') return send(401, { message: 'Bad credentials' });
+    const chunks = []; for await (const c of req) chunks.push(c);
+    const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
+    const view = g => ({ id: g.id, files: Object.fromEntries(Object.entries(g.files).map(([n, c]) => [n, { filename: n, truncated: c.length > 200000,
+      content: c.length > 200000 ? c.slice(0, 200000) : c, raw_url: `${PAY_BASE}/ghraw/tester/${g.id}/raw/${n}` }])) });
+    const m = url.pathname.match(/^\/gh\/gists\/(\w+)$/);
+    if (url.pathname === '/gh/user') return send(200, { login: 'tester' });
+    if (url.pathname === '/gh/gists' && req.method === 'POST') {
+      const g = { id: 'g' + (Object.keys(gists).length + 1), files: Object.fromEntries(Object.entries(body.files).map(([n, f]) => [n, f.content])) };
+      gists[g.id] = g; return send(201, view(g));
+    }
+    if (m && gists[m[1]]) {
+      if (req.method === 'PATCH') { ghLog.push(Object.keys(body.files)); for (const [n, f] of Object.entries(body.files)) gists[m[1]].files[n] = f.content; }
+      return send(200, view(gists[m[1]]));
+    }
+    return send(404, { message: 'Not Found' });
+  }
   if (url.pathname.startsWith('/relay/')) {
     const [, , topic, kind] = url.pathname.split('/');
     const head = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST', 'Access-Control-Allow-Headers': '*' };
@@ -107,6 +134,7 @@ http.createServer(async (req, res) => {
       out = s || { error: 'no session' };
     } else if (url.pathname === '/__mock/log') out = log;
     else if (url.pathname === '/__mock/sms-log') out = smsLog;
+    else if (url.pathname === '/__mock/gists') out = { gists, ghLog };
     else if (url.pathname === '/__mock/sms-in') {
       const params = { From: q.from, Body: q.body, MessageSid: 'SMin' + Date.now(), NumMedia: '0' };
       const hookUrl = 'http://localhost:8787/twilio/inbound';

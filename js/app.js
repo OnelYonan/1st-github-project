@@ -209,7 +209,7 @@ async function takeSnapshot(force = false) {
   try {
     const key = 'snap:' + today(), keys = (await idb.keys()).map(String);
     if (!force && keys.includes(key)) return;
-    await idb.set(key, JSON.stringify({ ...db, settings: { ...db.settings, stripeToken: '' } }));
+    await idb.set(key, JSON.stringify({ ...db, settings: { ...db.settings, stripeToken: '', sync: undefined } }));
     const snaps = keys.filter(k => k.startsWith('snap:')).concat(keys.includes(key) ? [] : [key]).sort();
     for (const k of snaps.slice(0, -7)) await idb.del(k);
   } catch { /* snapshots are a bonus; never block the app */ }
@@ -227,7 +227,8 @@ async function restoreSnapshot(key) {
   const d = JSON.parse(await idb.get(key));
   const keepToken = db.settings.stripeToken;
   await idb.set('undo:before-restore', JSON.stringify(db));
-  db = normalize(d); if (keepToken) db.settings.stripeToken = keepToken;
+  const keepSync = db.settings.sync;
+  db = normalize(d); if (keepToken) db.settings.stripeToken = keepToken; if (keepSync) db.settings.sync = keepSync;
   refresh(); go('#/dashboard'); toast(`Restored your data from ${fmtDate(key.slice(5))}`);
 }
 let saveChain = Promise.resolve();
@@ -239,6 +240,7 @@ function save() {
     return;
   }
   saveChain = saveChain.then(() => idb.set(KEY, snapshot)).catch(() => toast('Could not save your last change — please download a backup from Settings.'));
+  if (typeof scheduleSync === 'function') scheduleSync();
 }
 
 const byId = (coll, id) => db[coll].find(x => x.id === id);
@@ -934,6 +936,7 @@ function render() {
   if (!state.loaded) return;
   const [, name = 'dashboard', id] = (location.hash || '#/dashboard').split('/');
   if (name === 'signed' && id) { renderChrome(); receiveSignature(id); return; }
+  if (name === 'pair' && id) { receivePair(id); return; }
   const view = VIEWS[name] || VIEWS.dashboard;
   renderChrome();
   $('#sidebar').classList.remove('open'); $('.scrim')?.remove();
@@ -1027,6 +1030,237 @@ function paged(list, key) {
     ? `<div class="show-more">${btn(`Show more (${list.length - lim} more)`, 'showMore', 'btn-sm', `data-k="${key}"`)}</div>` : '' };
 }
 const tabsHTML = (view, key, list, cur) => `<div class="tabs">${list.map(([k, l]) => `<button data-tab="${view}:${key}:${k}" class="${k === cur ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+
+/* =====================================================================
+ * Sync between devices: an encrypted copy of your data in a private GitHub gist.
+ * Each device keeps working offline; changes are combined record by record.
+ * The key never leaves your devices, so GitHub only ever stores scrambled text.
+ * ===================================================================== */
+const SYNC_FILE = 'business-hub.json';
+const DEVICE_ONLY = ['sync', 'relaySince', 'relayPending', 'lastInboxCheck', 'syncApi', 'syncRaw'];
+const syncCfg = () => db.settings.sync;
+const syncOn = () => !!(syncCfg()?.token && syncCfg().gist && syncCfg().key);
+const GH_TOKEN_URL = 'https://github.com/settings/tokens/new?scopes=gist&description=Business%20Hub%20sync';
+async function gh(path, opts = {}, cfg = syncCfg()) {
+  let res;
+  try {
+    res = await fetch((cfg.api || 'https://api.github.com') + path, { cache: 'no-store', ...opts,
+      headers: { Authorization: `Bearer ${cfg.token}`, Accept: 'application/vnd.github+json', ...(opts.body ? { 'Content-Type': 'application/json' } : {}) } });
+  } catch { throw new Error('Could not reach GitHub. Check your internet connection.'); }
+  const d = await res.json().catch(() => ({}));
+  if (res.status === 401) throw new Error('GitHub didn’t accept the sync token. It may have expired: make a new one in Settings → Data & backup.');
+  if (res.status === 404) throw new Error('The synced copy wasn’t found on GitHub (was it deleted?). Turn sync off and on again.');
+  if (!res.ok) throw new Error(d.message || `GitHub error ${res.status}`);
+  return d;
+}
+/** The part of the data that is shared between devices. */
+const syncable = d => { const s = { ...d.settings }; DEVICE_ONLY.forEach(k => delete s[k]); return { ...d, settings: s }; };
+const J = v => (v === undefined ? undefined : JSON.stringify(v));
+/** Three-way merge of one list: what changed here wins over what didn't; if both changed, the newer edit wins. */
+function mergeList(b = [], l = [], r = []) {
+  const all = [...b, ...l, ...r];
+  if (!all.every(x => x && typeof x === 'object' && x.id)) return J(l) !== J(b) ? l : r; // plain lists (e.g. categories)
+  const map = a => new Map(a.map(x => [x.id, x]));
+  const B = map(b), L = map(l), R = map(r), out = [], seen = new Set();
+  for (const x of [...l, ...r]) {
+    if (seen.has(x.id)) continue; seen.add(x.id);
+    const bj = J(B.get(x.id)), lj = J(L.get(x.id)), rj = J(R.get(x.id));
+    let v;
+    if (lj === bj) v = R.get(x.id);
+    else if (rj === bj) v = L.get(x.id);
+    else if (lj === undefined) v = R.get(x.id); // deleted here but changed there: keep the change
+    else if (rj === undefined) v = L.get(x.id);
+    else v = (R.get(x.id)._u || 0) > (L.get(x.id)._u || 0) ? R.get(x.id) : L.get(x.id);
+    if (v) out.push(v);
+  }
+  return out;
+}
+function mergeObj(b = {}, l = {}, r = {}) {
+  const out = {};
+  for (const k of new Set([...Object.keys(l), ...Object.keys(r)])) {
+    const bj = J(b[k]), lj = J(l[k]);
+    const v = lj !== bj ? l[k] : r[k];
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+function mergeAll(b, l, r) {
+  const out = {};
+  for (const k of new Set([...Object.keys(l), ...Object.keys(r)])) {
+    if (k === 'settings') out[k] = mergeObj(b.settings, l.settings, r.settings);
+    else if (Array.isArray(l[k]) || Array.isArray(r[k])) out[k] = mergeList(b[k], l[k] || [], r[k] || []);
+    else out[k] = J(l[k]) !== J(b[k]) ? l[k] : r[k];
+  }
+  return out;
+}
+/** Mark records changed on this device since the last sync, so the newest edit wins a clash. */
+function stampChanges(base) {
+  if (!base) return;
+  const now = Date.now();
+  for (const [k, list] of Object.entries(db)) {
+    if (!Array.isArray(list) || !Array.isArray(base[k])) continue;
+    const old = new Map(base[k].filter(x => x?.id).map(x => [x.id, J(x)]));
+    for (const x of list) if (x?.id && old.get(x.id) !== J(x)) x._u = now;
+  }
+}
+let syncBusy = false, syncAgain = false, syncTimer = 0, syncQuiet = false;
+const scheduleSync = (ms = 3000) => { if (!syncOn() || syncQuiet) return; clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(), ms); };
+function quietSave() { syncQuiet = true; try { save(); } finally { syncQuiet = false; } }
+function showSyncState() {
+  const el = $('.js-sync-state'); if (!el) return;
+  const c = syncCfg() || {};
+  el.innerHTML = syncBusy ? '<span class="muted">Syncing…</span>' : c.error ? `<span style="color:var(--bad)">${esc(c.error)}</span>`
+    : c.lastSync ? `<span class="badge good">On</span> Last synced ${esc(new Date(c.lastSync).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }))}` : '';
+}
+async function syncNow(manual = false) {
+  if (!syncOn() || !state.loaded) return false;
+  if (syncBusy) { syncAgain = true; return false; }
+  // Don't swap data under an open form; try again shortly.
+  if ($('#modalRoot').children.length && !manual) { scheduleSync(5000); return false; }
+  syncBusy = true; showSyncState();
+  let changed = false;
+  try {
+    const cfg = syncCfg();
+    const g = await gh(`/gists/${cfg.gist}`);
+    const f = g.files?.[SYNC_FILE];
+    let remote = null;
+    if (f) {
+      const txt = f.truncated ? await (await fetch(f.raw_url, { cache: 'no-store' })).text() : f.content;
+      if (txt?.trim()) remote = (await BH.openSealed(txt.trim(), cfg.key)).db;
+    }
+    const baseTxt = await idb.get('sync:base').catch(() => null);
+    const base = baseTxt ? JSON.parse(baseTxt) : null;
+    stampChanges(base);
+    const localTxt = JSON.stringify(syncable(db)), local = JSON.parse(localTxt);
+    const merged = remote ? mergeAll(base || {}, local, remote) : local;
+    const mergedTxt = JSON.stringify(merged);
+    if (!remote || mergedTxt !== JSON.stringify(remote)) {
+      await gh(`/gists/${cfg.gist}`, { method: 'PATCH', body: JSON.stringify({ files: { [SYNC_FILE]: { content: await BH.seal({ v: 1, at: new Date().toISOString(), db: merged }, cfg.key) } } }) });
+    }
+    if (mergedTxt !== localTxt) {
+      // something changed here while we were syncing, or a form is open: apply next time
+      if (JSON.stringify(syncable(db)) !== localTxt || $('#modalRoot').children.length) { syncAgain = true; return false; }
+      const keep = Object.fromEntries(DEVICE_ONLY.map(k => [k, db.settings[k]]));
+      db = normalize({ ...merged, settings: { ...merged.settings, ...keep } });
+      changed = true;
+    }
+    await idb.set('sync:base', mergedTxt);
+    syncCfg().lastSync = Date.now(); syncCfg().error = '';
+    quietSave();
+    if (changed) render();
+    await syncImages(syncCfg());
+    if (manual) toast(changed ? 'Synced: new changes from your other devices' : 'Up to date');
+    return changed;
+  } catch (e) {
+    if (syncCfg()) { syncCfg().error = e.message; quietSave(); }
+    if (manual) toast(e.message);
+    return false;
+  } finally {
+    syncBusy = false; showSyncState();
+    if (syncAgain) { syncAgain = false; scheduleSync(1500); }
+  }
+}
+/** Photos and receipts: upload new ones, fetch the ones another device added. */
+async function syncImages(cfg) {
+  if (storageMode !== 'idb') return;
+  const ids = [...new Set(imageIds(db))];
+  const done = new Set(JSON.parse(await idb.get('sync:imgs').catch(() => null) || '[]'));
+  const up = [];
+  for (const id of ids) if (!done.has(id)) { const v = await idb.get('img:' + id).catch(() => null); if (v) up.push([id, v]); }
+  while (up.length) {
+    const batch = []; let size = 0;
+    while (up.length && size < 2.5e6) { const [id, v] = up.shift(); const c = await BH.seal({ d: v }, cfg.key); batch.push([id, c]); size += c.length; }
+    await gh(`/gists/${cfg.gist}`, { method: 'PATCH', body: JSON.stringify({ files: Object.fromEntries(batch.map(([id, c]) => [`img-${id}.txt`, { content: c }])) }) });
+    batch.forEach(([id]) => done.add(id));
+    await idb.set('sync:imgs', JSON.stringify([...done]));
+  }
+  let got = 0;
+  for (const id of ids) {
+    if (done.has(id)) continue;
+    try {
+      const res = await fetch(`${cfg.raw || 'https://gist.githubusercontent.com'}/${cfg.owner}/${cfg.gist}/raw/img-${id}.txt`, { cache: 'no-store' });
+      if (!res.ok) continue;
+      const v = (await BH.openSealed((await res.text()).trim(), cfg.key)).d;
+      await idb.set('img:' + id, v); imgCache.set(id, v); done.add(id); got++;
+    } catch { /* not uploaded yet: next time */ }
+  }
+  if (got) { await idb.set('sync:imgs', JSON.stringify([...done])); hydrateImages($('#main')); }
+}
+const pairLink = async () => { const c = syncCfg(); return `${appBase()}#/pair/${await BH.pack({ t: c.token, g: c.gist, k: c.key, o: c.owner, ...(c.api ? { a: c.api, r: c.raw } : {}) })}`; };
+function syncSetupForm() {
+  modal({ title: 'Sync your devices', submitLabel: 'Connect', focus: false, body: `
+    <p class="muted small" style="margin-top:0">Your customers, jobs, quotes and everything else will show up on your phone <b>and</b> your computer, and stay up to date on both. It uses a free private space on your GitHub account. Your data is encrypted on this device first, so GitHub can’t read it.</p>
+    <p class="muted small"><b>Already set up on another device?</b> Don’t do this here. Instead, on that device open Settings → Data &amp; backup → <b>Connect another device</b>, and open the link it gives you on this one.</p>
+    <ol class="wizard">
+      <li><div class="wz-h">Make a sync token on GitHub</div>
+        <div class="muted small">Sign in, then under <b>Expiration</b> pick <b>No expiration</b>, and tap <b>Generate token</b> at the bottom. Copy the token (starts with <code>ghp_</code>).</div>
+        <div class="row"><a class="btn btn-sm btn-primary" href="${GH_TOKEN_URL}" target="_blank" rel="noopener">Open GitHub ↗</a></div></li>
+      <li><div class="wz-h">Paste it here</div>
+        <input name="token" required autocomplete="off" spellcheck="false" placeholder="ghp_…" class="mono"></li>
+    </ol><div class="js-sync-msg"></div>`,
+    onSubmit: (f, d) => {
+      const token = d.token.trim(), msg = $('.js-sync-msg', f);
+      msg.innerHTML = '<div class="alert info">Connecting…</div>';
+      const cfg = { token, api: db.settings.syncApi || '', raw: db.settings.syncRaw || '' };
+      (async () => {
+        const me = await gh('/user', {}, cfg);
+        const key = BH.newKey();
+        const g = await gh('/gists', { method: 'POST', body: JSON.stringify({ description: 'Business Hub sync (encrypted)', public: false,
+          files: { [SYNC_FILE]: { content: await BH.seal({ v: 1, at: new Date().toISOString(), db: syncable(db) }, key) } } }) }, cfg);
+        db.settings.sync = { ...cfg, owner: me.login, gist: g.id, key, since: today() };
+        await idb.set('sync:base', JSON.stringify(syncable(db))); await idb.set('sync:imgs', '[]');
+        quietSave(); f.closest('.modal-backdrop')?.remove(); render();
+        await syncNow(true);
+        pairSheet(true);
+      })().catch(e => { msg.innerHTML = `<div class="alert bad">${icon('alert')}<span>${esc(e.message)}</span></div>`; });
+      return false;
+    } });
+}
+async function pairSheet(first = false) {
+  const link = await pairLink(), s = db.settings;
+  modal({ title: first ? 'Sync is on ✓' : 'Connect another device', noFoot: true, focus: false, body: `
+    <p class="muted small" style="margin-top:0">${first ? 'This device is synced. ' : ''}To add your computer (or another phone), open this link on it. Everything on that device is combined with this one, and they stay in sync.</p>
+    <div class="stack" style="gap:8px">
+      ${s.email ? `<a class="btn btn-primary js-raw" href="${mailHref(s.email, 'Connect Business Hub', `Open this on your computer to connect it to Business Hub:\n\n${link}\n\nKeep this private: anyone with this link can see your business data.`)}">${icon('mail')}Email it to myself</a>` : ''}
+      <button type="button" class="btn ${s.email ? '' : 'btn-primary'} js-copy">${icon('share')}Copy link</button>
+    </div>
+    <div class="qr-box js-qr"></div>
+    <p class="muted small">On a phone, you can also scan the code with the camera. <b>Keep this link private</b>: anyone who has it can open your business data.</p>`,
+    onMount: f => {
+      $('.js-copy', f).addEventListener('click', async () => { try { await navigator.clipboard.writeText(link); toast('Link copied. Open it on your other device.'); } catch { prompt('Copy this link:', link); } });
+      loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js').then(() => {
+        const qr = window.qrcode(0, 'L'); qr.addData(link); qr.make(); $('.js-qr', f).innerHTML = qr.createSvgTag({ cellSize: 3, margin: 2, scalable: true });
+      }).catch(() => {});
+    } });
+}
+async function receivePair(data) {
+  let p;
+  try { p = await BH.unpack(data); } catch { $('#main').innerHTML = empty('alert', 'This connect link could not be read. Copy it again from your other device.'); return; }
+  history.replaceState(null, '', '#/dashboard'); // don't keep the key in the address bar
+  if (syncOn() && syncCfg().gist === p.g) { render(); toast('This device is already synced'); return; }
+  render();
+  modal({ title: 'Connect this device?', submitLabel: 'Connect', body: `
+    <p>This device will share data with your other devices: customers, jobs, quotes, invoices and everything else.</p>
+    <p class="muted small">Anything already on this device is combined with your synced data, so nothing is lost.</p>`,
+    onSubmit: () => {
+      db.settings.sync = { token: p.t, gist: p.g, key: p.k, owner: p.o, api: p.a || '', raw: p.r || '', since: today() };
+      quietSave();
+      (async () => {
+        await idb.del('sync:base').catch(() => {}); await idb.set('sync:imgs', '[]');
+        const ch = await syncNow();
+        toast(syncCfg()?.error ? 'Couldn’t sync: ' + syncCfg().error : ch ? 'Connected. Your data is here now ✓' : 'Connected ✓');
+        render();
+      })();
+    } });
+}
+function syncOff() {
+  if (!confirm('Stop syncing on this device? Your data stays here and on your other devices.')) return;
+  delete db.settings.sync; idb.del('sync:base').catch(() => {}); quietSave(); render(); toast('Sync is off on this device');
+}
+// When to sync: after changes, when the app opens or comes back to the screen, and every 45 seconds while open.
+setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, 45000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') syncNow(); });
+window.addEventListener('online', () => syncNow());
 
 /* =====================================================================
  * Views
@@ -3973,6 +4207,13 @@ VIEWS.settings = () => {
     ${field('One per line', `<textarea name="categories" rows="8">${esc(db.categories.join('\n'))}</textarea>`)}</div>
   <div class="row ${sec === 'data' ? 'hidden' : ''}" data-sec-save><button class="btn btn-primary" type="submit">Save settings</button></div>
   </form>
+  <div class="card ${show('data')}"><h2>Sync your phone and computer</h2>
+    ${syncOn() ? `<div class="stripe-status js-sync-state">${syncCfg().error ? `<span style="color:var(--bad)">${esc(syncCfg().error)}</span>` : `<span class="badge good">On</span> ${syncCfg().lastSync ? 'Last synced ' + esc(new Date(syncCfg().lastSync).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })) : 'Connected'}`}</div>
+      <p class="muted small">Everything you add or change here shows up on your other devices within a minute (and the other way round). Encrypted with a key only your devices have.</p>
+      <div class="row">${btn('Connect another device', 'syncPair', 'btn-sm btn-primary', 'type="button"', 'share')}${btn('Sync now', 'syncNow', 'btn-sm', 'type="button"', 'repeat')}${btn('Turn off on this device', 'syncOff', 'btn-sm', 'type="button"')}</div>`
+    : `<p class="muted small">Right now your data lives only on this device. Turn on sync and your customers, jobs, quotes, invoices and photos show up on your phone <b>and</b> your computer, kept up to date automatically. Free, using your GitHub account, and encrypted so only your devices can read it.</p>
+      <div class="row">${btn('Turn on sync', 'syncSetup', 'btn-sm btn-primary', 'type="button"', 'repeat')}</div>
+      <p class="muted small" style="margin-bottom:0">Already syncing on another device? On that device tap <b>Connect another device</b> and open the link here.</p>`}</div>
   <div class="card ${show('data')}"><h2>Your data</h2>
     <p class="muted small">Everything is saved privately in this browser on this device (${used} MB used). <b>Download a backup regularly</b>, and use Restore to move your data to another phone or computer.
     ${s.lastBackup ? `Last backup: ${fmtDate(s.lastBackup)}.` : '<b style="color:var(--warn)">You haven’t made a backup yet.</b>'}</p>
@@ -4754,6 +4995,10 @@ const ACTIONS = {
   hideSetup: () => { db.settings.hideSetup = true; refresh(); },
   hideInstall: () => { db.settings.hideInstall = true; refresh(); },
   quickSetup: () => quickSetupForm(),
+  syncSetup: () => syncSetupForm(),
+  syncPair: () => pairSheet(),
+  syncNow: () => syncNow(true),
+  syncOff: () => syncOff(),
   bookingShare: () => bookingShare(),
   sendReminders: () => remindersSheet(),
   remindOverdue: () => overdueSheet(),
@@ -4875,7 +5120,7 @@ const ACTIONS = {
   exportBackup: async () => {
     const images = {};
     for (const id of imageIds(db)) { const v = await getImage(id); if (v) images[id] = v; }
-    const name = `business-hub-backup-${today()}.json`, data = JSON.stringify({ ...db, settings: { ...db.settings, stripeToken: '' }, images });
+    const name = `business-hub-backup-${today()}.json`, data = JSON.stringify({ ...db, settings: { ...db.settings, stripeToken: '', sync: undefined }, images });
     db.settings.lastBackup = today(); save();
     const file = typeof File === 'function' ? new File([data], name, { type: 'application/json' }) : null;
     // On phones, the share sheet lets you save straight to Files, Google Drive or email.
@@ -4888,16 +5133,18 @@ const ACTIONS = {
     onSubmit: f => { const file = f.file.files[0]; if (!file) return false;
       file.text().then(async t => {
         let d; try { d = JSON.parse(t); if (!d.settings || !Array.isArray(d.invoices)) throw 0; } catch { return alert('That file is not a valid backup.'); }
-        const { images = {}, ...rest } = d, keep = { stripeToken: db.settings.stripeToken, meId: db.settings.meId };
+        const { images = {}, ...rest } = d, keep = { stripeToken: db.settings.stripeToken, meId: db.settings.meId, sync: db.settings.sync };
         if (storageMode === 'idb') { for (const [id, v] of Object.entries(images)) { await idb.set('img:' + id, v); imgCache.set(id, v); } }
         else rest.jobs?.forEach(j => (j.photos || []).forEach(ph => { if (ph.img && images[ph.img]) { ph.src = images[ph.img]; delete ph.img; } }));
         db = normalize(rest);
         if (!db.settings.stripeToken && keep.stripeToken) db.settings.stripeToken = keep.stripeToken;
+        if (keep.sync) db.settings.sync = keep.sync;
         refresh(); go('#/dashboard'); toast('Backup restored');
       }); } }),
   eraseAll: async () => {
     if (!(confirm('Erase ALL data in this browser? Download a backup first if you might need it.') && confirm('Are you absolutely sure?'))) return;
     await takeSnapshot(true); // today's copy, so this can be undone from Settings → Data
+    if (db.settings.sync) { delete db.settings.sync; idb.del('sync:base').catch(() => {}); } // erase only this device, not your other devices
     const s = db.settings; db = blank(); if (confirm('Keep your business settings (name, logo, tax)?')) db.settings = s;
     refresh(); go('#/dashboard'); toast('Erased. Changed your mind? Settings → Data & backup → Automatic daily copies.');
   },
@@ -5210,6 +5457,7 @@ load().then(d => {
   migrateImages().then(() => hydrateImages($('#main')));
   takeSnapshot();
   setTimeout(() => checkInbox(), 1500);
+  setTimeout(() => syncNow(), 800);
   if (storageMode === 'local') toast('Private browsing detected: data may not be kept. Download backups often.');
 });
 navigator.storage?.persist?.().catch(() => {}); // ask the browser not to clear our data
